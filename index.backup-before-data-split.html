@@ -267,16 +267,14 @@
     text-wrap:pretty;
   }
   .sheet__photos{ display:flex; flex-direction:column; gap:10px; margin:0 0 18px; }
-  .sheet__photo{ margin:0; }
   .sheet__photos img{
     width:100%; border-radius:14px; display:block;
     border:1px solid var(--line);
   }
-  .sheet__caption{ margin:6px 4px 0; font-size:.86rem; color:var(--muted); line-height:1.5; }
   .sheet__body p{
     font-size:calc(1.04rem * var(--reading-scale));
     line-height:1.95; margin:0 0 1em; color:#564C42;
-    text-wrap:pretty; white-space:pre-line;
+    text-wrap:pretty;
   }
   .sheet__body p:last-child{ margin-bottom:0; }
 
@@ -350,7 +348,7 @@
    설정 — 여기만 바꾸면 동작이 달라집니다.
    ============================================================= */
 const CONFIG = {
-  indexUrl: 'data/diary-index.json',
+  dataUrl: 'diaries.json',  // 일기 데이터 파일 (이 파일만 갈아끼우면 됩니다)
   headerText: '당신을 위한 따뜻한 마음 모음',
   weekStartsOn: 0,          // 0 = 일요일, 1 = 월요일
   introEveryTime: true,     // 접속할 때마다 인트로 보여주기
@@ -358,36 +356,27 @@ const CONFIG = {
   yearRange: 4              // 연도 선택 범위 (오늘 기준 ±N년)
 };
 
-/* data/diary-index.json 형식 (참고)
+/* diaries.json 형식 (참고)
 {
   "2026-06-08": {
     "title": "제목",
-    "entryUrl": "data/entries/2026-06-08.json",
-    "hasPhotos": true
+    "body": "본문. 줄바꿈은 \n 으로.\n여러 문단도 가능합니다.",
+    "photos": ["img/사진1.jpg", "img/사진2.jpg"]   // 없으면 [] 또는 생략
   }
 }
 */
 
 /* 데이터 파일을 못 불러올 때(예: 로컬 파일로 직접 열 때) 보여줄 예시 */
-const FALLBACK_INDEX = {
-  "2026-06-01": { "title":"유월의 첫 아침", "entryUrl":"fallback:2026-06-01", "hasPhotos":true },
-  "2026-06-03": { "title":"퇴근길에 산 작은 꽃", "entryUrl":"fallback:2026-06-03", "hasPhotos":false },
-  "2026-06-08": { "title":"비 오는 날의 우리", "entryUrl":"fallback:2026-06-08", "hasPhotos":true },
-  "2026-06-14": { "title":"당신이 웃던 순간", "entryUrl":"fallback:2026-06-14", "hasPhotos":false },
-  "2026-06-21": { "title":"함께 걸은 저녁 산책", "entryUrl":"fallback:2026-06-21", "hasPhotos":true }
-};
-const FALLBACK_ENTRIES = {
-  "2026-06-01": { "date":"2026-06-01", "title":"유월의 첫 아침", "body":"오늘부터 당신에게 보내는 마음을 이곳에 모으기로 했어요.\n창문으로 들어오는 햇살이 당신 자는 얼굴에 닿는 걸 한참 바라봤어요.", "photos":["img/photo-sample-1.jpg"] },
-  "2026-06-03": { "date":"2026-06-03", "title":"퇴근길에 산 작은 꽃", "body":"집에 오는 길, 꽃집 앞을 그냥 못 지나쳤어요. 당신이 좋아하던 색이라서요.", "photos":[] },
-  "2026-06-08": { "date":"2026-06-08", "title":"비 오는 날의 우리", "body":"비가 와서 하루 종일 집에 있었어요. 빗소리 들으며 같이 마신 차 한 잔이 어떤 여행보다 좋았어요.", "photos":["img/photo-sample-2.jpg"] },
-  "2026-06-14": { "date":"2026-06-14", "title":"당신이 웃던 순간", "body":["오늘 당신이 크게 웃는 걸 봤어요.","그 웃음 하나에 하루의 피로가 다 사라졌어요."], "photos":[] },
-  "2026-06-21": { "date":"2026-06-21", "title":"함께 걸은 저녁 산책", "body":"해가 길어진 저녁, 손잡고 동네를 한 바퀴 돌았어요. 마음이 가득 찼어요.", "photos":["img/photo-sample-1.jpg","img/photo-sample-2.jpg"] }
+const FALLBACK = {
+  "2026-06-01": { "title":"유월의 첫 아침", "body":"오늘부터 당신에게 보내는 마음을 이곳에 모으기로 했어요.\n창문으로 들어오는 햇살이 당신 자는 얼굴에 닿는 걸 한참 바라봤어요.", "photos":["img/photo-sample-1.jpg"] },
+  "2026-06-03": { "title":"퇴근길에 산 작은 꽃", "body":"집에 오는 길, 꽃집 앞을 그냥 못 지나쳤어요. 당신이 좋아하던 색이라서요.", "photos":[] },
+  "2026-06-08": { "title":"비 오는 날의 우리", "body":"비가 와서 하루 종일 집에 있었어요. 빗소리 들으며 같이 마신 차 한 잔이 어떤 여행보다 좋았어요.", "photos":["img/photo-sample-2.jpg"] },
+  "2026-06-14": { "title":"당신이 웃던 순간", "body":"오늘 당신이 크게 웃는 걸 봤어요. 그 웃음 하나에 하루의 피로가 다 사라졌어요.", "photos":[] },
+  "2026-06-21": { "title":"함께 걸은 저녁 산책", "body":"해가 길어진 저녁, 손잡고 동네를 한 바퀴 돌았어요. 마음이 가득 찼어요.", "photos":["img/photo-sample-1.jpg","img/photo-sample-2.jpg"] }
 };
 
 /* ------------------------------------------------------------ */
-let DIARY_INDEX = {};
-const ENTRY_CACHE = {};
-const TEXT_CACHE = {};
+let DIARIES = {};
 const $ = (s)=>document.querySelector(s);
 const pad = (n)=>String(n).padStart(2,'0');
 const keyOf = (y,m,d)=>`${y}-${pad(m+1)}-${pad(d)}`;
@@ -499,7 +488,7 @@ function renderCalendar(){
     if(dow===6) cell.classList.add('sat');
 
     const k = keyOf(viewY,viewM,d);
-    const has = !!DIARY_INDEX[k];
+    const has = !!DIARIES[k];
     if(has) cell.classList.add('has');
     if(viewY===today.getFullYear() && viewM===today.getMonth() && d===today.getDate())
       cell.classList.add('today');
@@ -519,93 +508,32 @@ function renderCalendar(){
 }
 
 /* ---------- 일기 모달 ---------- */
-function showBodyLines(lines){
-  const body=$('#sheetBody'); body.innerHTML='';
-  const items = Array.isArray(lines)
-    ? lines
-    : String(lines||'').replace(/\r\n/g, '\n').split(/\n[ \t]*\n/);
-  if(items.length===0 || items.every(line=>String(line).trim()==='')){
-    const p=document.createElement('p');
-    p.textContent = '아직 적힌 본문이 없어요.';
-    body.appendChild(p);
-    return;
-  }
-  items.forEach(line=>{
-    const p=document.createElement('p');
-    p.textContent = String(line).trim()===''? '\u00A0' : line;
-    body.appendChild(p);
-  });
-}
-function renderPhotos(photos){
-  const ph = $('#sheetPhotos'); ph.innerHTML='';
-  (photos||[]).forEach(photo=>{
-    const info = typeof photo === 'string' ? {src:photo, alt:'', caption:''} : (photo||{});
-    if(!info.src) return;
-    const figure=document.createElement('figure');
-    figure.className='sheet__photo';
-    const img=new Image();
-    img.src=info.src;
-    img.alt=info.alt || '';
-    img.onerror=()=>figure.remove();
-    figure.appendChild(img);
-    if(info.caption){
-      const cap=document.createElement('figcaption');
-      cap.className='sheet__caption';
-      cap.textContent=info.caption;
-      figure.appendChild(cap);
-    }
-    ph.appendChild(figure);
-  });
-}
-async function fetchEntry(key, indexItem){
-  if(ENTRY_CACHE[key]) return ENTRY_CACHE[key];
-  if(indexItem.entryUrl && indexItem.entryUrl.startsWith('fallback:')){
-    ENTRY_CACHE[key] = FALLBACK_ENTRIES[key] || {};
-    return ENTRY_CACHE[key];
-  }
-  if(!indexItem.entryUrl) throw new Error('entryUrl is missing');
-  const res = await fetch(indexItem.entryUrl, {cache:'no-store'});
-  if(!res.ok) throw new Error(res.status);
-  ENTRY_CACHE[key] = await res.json();
-  return ENTRY_CACHE[key];
-}
-async function fetchBodyText(bodyUrl){
-  if(TEXT_CACHE[bodyUrl] !== undefined) return TEXT_CACHE[bodyUrl];
-  const res = await fetch(bodyUrl, {cache:'no-store'});
-  if(!res.ok) throw new Error(res.status);
-  TEXT_CACHE[bodyUrl] = await res.text();
-  return TEXT_CACHE[bodyUrl];
-}
-async function openDiary(key){
-  const indexItem = DIARY_INDEX[key]; if(!indexItem) return;
+function openDiary(key){
+  const d = DIARIES[key]; if(!d) return;
   const [y,m,day] = key.split('-').map(Number);
   const dow = DOW_KO[new Date(y,m-1,day).getDay()];
   $('#sheetDate').textContent = `${y}년 ${m}월 ${day}일 ${dow}요일`;
-  $('#sheetTitle').textContent = indexItem.title || '';
-  renderPhotos([]);
-  showBodyLines('일기를 불러오고 있어요...');
+  $('#sheetTitle').textContent = d.title || '';
+
+  const ph = $('#sheetPhotos'); ph.innerHTML='';
+  (d.photos||[]).forEach(src=>{
+    const img=new Image();
+    img.src=src; img.alt='';
+    img.onerror=()=>img.remove();
+    ph.appendChild(img);
+  });
+
+  const body=$('#sheetBody'); body.innerHTML='';
+  String(d.body||'').split('\n').forEach(line=>{
+    const p=document.createElement('p');
+    p.textContent = line.trim()===''? '\u00A0' : line;
+    body.appendChild(p);
+  });
 
   const modal=$('#modal');
   modal.classList.add('open');
   $('#sheet').scrollTop=0;
   document.body.style.overflow='hidden';
-
-  try{
-    const entry = await fetchEntry(key, indexItem);
-    $('#sheetTitle').textContent = entry.title || indexItem.title || '';
-    renderPhotos(entry.photos || []);
-    if(entry.bodyUrl){
-      showBodyLines(await fetchBodyText(entry.bodyUrl));
-    }else if(Array.isArray(entry.body)){
-      showBodyLines(entry.body);
-    }else{
-      showBodyLines(entry.body || '');
-    }
-  }catch(e){
-    console.warn('일기 상세 데이터를 불러오지 못했습니다.', e);
-    renderPhotos([]);
-    showBodyLines('일기를 불러오지 못했어요. 잠시 후 다시 열어 주세요.');
-  }
 }
 function closeDiary(){
   $('#modal').classList.remove('open');
@@ -623,12 +551,12 @@ function applyFont(){
 /* ---------- 데이터 로드 ---------- */
 async function loadData(){
   try{
-    const res = await fetch(CONFIG.indexUrl, {cache:'no-store'});
+    const res = await fetch(CONFIG.dataUrl, {cache:'no-store'});
     if(!res.ok) throw new Error(res.status);
-    DIARY_INDEX = await res.json();
+    DIARIES = await res.json();
   }catch(e){
-    console.warn('일기 인덱스를 불러오지 못해 예시 데이터를 표시합니다.', e);
-    DIARY_INDEX = FALLBACK_INDEX;
+    console.warn('diaries.json 을 불러오지 못해 예시 데이터를 표시합니다.', e);
+    DIARIES = FALLBACK;
   }
   renderCalendar();
 }
