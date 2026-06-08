@@ -393,7 +393,8 @@
    설정 — 여기만 바꾸면 동작이 달라집니다.
    ============================================================= */
 const CONFIG = {
-  indexUrl: 'data/diary-index.json',
+  indexUrl: 'Diary_formyWife/data/diary-index.json',
+  dataPathPrefix: 'Diary_formyWife/',
   headerText: '당신을 위한 따뜻한 마음 모음',
   weekStartsOn: 0,          // 0 = 일요일, 1 = 월요일
   introEveryTime: true,     // 접속할 때마다 인트로 보여주기
@@ -436,6 +437,11 @@ const $ = (s)=>document.querySelector(s);
 const pad = (n)=>String(n).padStart(2,'0');
 const keyOf = (y,m,d)=>`${y}-${pad(m+1)}-${pad(d)}`;
 const DOW_KO = ['일','월','화','수','목','금','토'];
+const resolveDataUrl = (url)=>{
+  if(!url || /^(?:[a-z]+:)?\/\//i.test(url) || url.startsWith('/') || url.startsWith(CONFIG.dataPathPrefix)) return url;
+  if(url.startsWith('data/')) return CONFIG.dataPathPrefix + url;
+  return url;
+};
 
 const today = new Date();
 let viewY = today.getFullYear();
@@ -588,7 +594,7 @@ function renderPhotos(photos){
     const figure=document.createElement('figure');
     figure.className='sheet__photo';
     const img=new Image();
-    img.src=info.src;
+    img.src=resolveDataUrl(info.src);
     img.alt=info.alt || '';
     img.onerror=()=>figure.remove();
     figure.appendChild(img);
@@ -608,14 +614,14 @@ async function fetchEntry(key, indexItem){
     return ENTRY_CACHE[key];
   }
   if(!indexItem.entryUrl) throw new Error('entryUrl is missing');
-  const res = await fetch(indexItem.entryUrl, {cache:'no-store'});
+  const res = await fetch(resolveDataUrl(indexItem.entryUrl), {cache:'no-store'});
   if(!res.ok) throw new Error(res.status);
   ENTRY_CACHE[key] = await res.json();
   return ENTRY_CACHE[key];
 }
 async function fetchBodyText(bodyUrl){
   if(TEXT_CACHE[bodyUrl] !== undefined) return TEXT_CACHE[bodyUrl];
-  const res = await fetch(bodyUrl, {cache:'no-store'});
+  const res = await fetch(resolveDataUrl(bodyUrl), {cache:'no-store'});
   if(!res.ok) throw new Error(res.status);
   TEXT_CACHE[bodyUrl] = await res.text();
   return TEXT_CACHE[bodyUrl];
