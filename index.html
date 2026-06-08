@@ -228,6 +228,7 @@
     transition:opacity .4s ease;
   }
   .modal.open{ opacity:1; pointer-events:auto; }
+  body.diary-reading-fullscreen{ overflow:hidden; }
   .sheet{
     width:min(100%,520px);
     max-height:88dvh; overflow:auto;
@@ -258,7 +259,48 @@
   }
   .tbtn:hover{ background:rgba(196,154,94,.12); border-color:var(--gold); color:var(--ink); }
   .tbtn.az{ font-size:.7rem; } .tbtn.az b{ font-size:.96rem; }
+  .tbtn.fullscreen{ font-size:.95rem; }
   .tbtn.close{ font-size:1.1rem; }
+
+  .modal.reader-fullscreen{
+    padding:0;
+    place-items:stretch;
+    background:var(--paper);
+    backdrop-filter:none;
+  }
+  .modal.reader-fullscreen .sheet{
+    width:100vw;
+    height:100dvh;
+    max-height:100dvh;
+    border-radius:0;
+    border:0;
+    box-shadow:none;
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      calc(18px + env(safe-area-inset-right))
+      calc(24px + env(safe-area-inset-bottom))
+      calc(18px + env(safe-area-inset-left));
+    transform:none;
+    background:var(--paper);
+    overflow:auto;
+  }
+  .modal.reader-fullscreen .sheet__top{
+    position:sticky;
+    top:calc(-14px - env(safe-area-inset-top));
+    z-index:2;
+    margin:
+      calc(-14px - env(safe-area-inset-top))
+      calc(-18px - env(safe-area-inset-right))
+      14px
+      calc(-18px - env(safe-area-inset-left));
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      calc(18px + env(safe-area-inset-right))
+      12px
+      calc(18px + env(safe-area-inset-left));
+    background:var(--paper);
+    border-bottom:1px solid rgba(196,154,94,.18);
+  }
 
   .sheet__title{
     font-family:var(--serif-display); font-weight:800;
@@ -336,6 +378,7 @@
         <div class="sheet__tools">
           <button class="tbtn az" id="fontDown" aria-label="글자 작게">A<span style="font-size:.6rem">－</span></button>
           <button class="tbtn az" id="fontUp" aria-label="글자 크게"><b>A</b><span style="font-size:.66rem">＋</span></button>
+          <button class="tbtn fullscreen" id="fullscreenBtn" aria-label="전체 화면으로 보기" aria-pressed="false" title="전체 화면">⛶</button>
           <button class="tbtn close" id="closeBtn" aria-label="닫기">×</button>
         </div>
       </div>
@@ -388,6 +431,7 @@ const FALLBACK_ENTRIES = {
 let DIARY_INDEX = {};
 const ENTRY_CACHE = {};
 const TEXT_CACHE = {};
+let lastNativeFullscreenExitAt = 0;
 const $ = (s)=>document.querySelector(s);
 const pad = (n)=>String(n).padStart(2,'0');
 const keyOf = (y,m,d)=>`${y}-${pad(m+1)}-${pad(d)}`;
@@ -576,8 +620,70 @@ async function fetchBodyText(bodyUrl){
   TEXT_CACHE[bodyUrl] = await res.text();
   return TEXT_CACHE[bodyUrl];
 }
+function getNativeFullscreenElement(){
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+function isReadingFullscreen(){
+  return $('#modal').classList.contains('reader-fullscreen') || !!getNativeFullscreenElement();
+}
+function updateFullscreenButton(){
+  const btn = $('#fullscreenBtn');
+  if(!btn) return;
+  const active = isReadingFullscreen();
+  btn.setAttribute('aria-label', active ? '전체 화면 해제' : '전체 화면으로 보기');
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  btn.title = active ? '전체 화면 해제' : '전체 화면';
+  btn.textContent = active ? '↙' : '⛶';
+}
+async function enterReadingFullscreen(){
+  const modal = $('#modal');
+  const sheet = $('#sheet');
+  modal.classList.add('reader-fullscreen');
+  document.body.classList.add('diary-reading-fullscreen');
+  document.body.style.overflow='hidden';
+  updateFullscreenButton();
+
+  try{
+    if(sheet.requestFullscreen){
+      await sheet.requestFullscreen({navigationUI:'hide'});
+    }else if(sheet.webkitRequestFullscreen){
+      sheet.webkitRequestFullscreen();
+    }
+  }catch(e){
+    console.info('브라우저 전체화면 전환은 실패했지만 CSS 읽기 모드는 유지합니다.', e);
+  }finally{
+    updateFullscreenButton();
+  }
+}
+async function exitReadingFullscreen(options={}){
+  const modal = $('#modal');
+  modal.classList.remove('reader-fullscreen');
+  document.body.classList.remove('diary-reading-fullscreen');
+
+  if(!options.skipNative && getNativeFullscreenElement()){
+    try{
+      if(document.exitFullscreen){
+        await document.exitFullscreen();
+      }else if(document.webkitExitFullscreen){
+        document.webkitExitFullscreen();
+      }
+    }catch(e){
+      console.info('브라우저 전체화면 해제 중 오류가 있었지만 읽기 모드는 정리했습니다.', e);
+    }
+  }
+
+  updateFullscreenButton();
+}
+async function toggleReadingFullscreen(){
+  if(isReadingFullscreen()){
+    await exitReadingFullscreen();
+  }else{
+    await enterReadingFullscreen();
+  }
+}
 async function openDiary(key){
   const indexItem = DIARY_INDEX[key]; if(!indexItem) return;
+  await exitReadingFullscreen({skipNative:false});
   const [y,m,day] = key.split('-').map(Number);
   const dow = DOW_KO[new Date(y,m-1,day).getDay()];
   $('#sheetDate').textContent = `${y}년 ${m}월 ${day}일 ${dow}요일`;
@@ -607,9 +713,13 @@ async function openDiary(key){
     showBodyLines('일기를 불러오지 못했어요. 잠시 후 다시 열어 주세요.');
   }
 }
-function closeDiary(){
+async function closeDiary(){
+  if(isReadingFullscreen()){
+    await exitReadingFullscreen();
+  }
   $('#modal').classList.remove('open');
   document.body.style.overflow='';
+  updateFullscreenButton();
 }
 
 /* ---------- 글자 크기 (모바일 가독성) ---------- */
@@ -647,10 +757,41 @@ function init(){
   $('#prevBtn').addEventListener('click', ()=>{ viewM--; if(viewM<0){viewM=11;viewY--;} renderCalendar(); });
   $('#nextBtn').addEventListener('click', ()=>{ viewM++; if(viewM>11){viewM=0;viewY++;} renderCalendar(); });
   $('#closeBtn').addEventListener('click', closeDiary);
-  $('#modal').addEventListener('click', e=>{ if(e.target===$('#modal')) closeDiary(); });
+  $('#fullscreenBtn').addEventListener('click', toggleReadingFullscreen);
+  $('#modal').addEventListener('click', e=>{
+    if(e.target===$('#modal') && !isReadingFullscreen()) closeDiary();
+  });
   $('#fontUp').addEventListener('click', ()=>{ fontScale+=0.12; applyFont(); });
   $('#fontDown').addEventListener('click', ()=>{ fontScale-=0.12; applyFont(); });
-  document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDiary(); });
+  document.addEventListener('fullscreenchange', ()=>{
+    if(!getNativeFullscreenElement() && $('#modal').classList.contains('reader-fullscreen')){
+      lastNativeFullscreenExitAt = Date.now();
+      exitReadingFullscreen({skipNative:true});
+    }else{
+      updateFullscreenButton();
+    }
+  });
+  document.addEventListener('webkitfullscreenchange', ()=>{
+    if(!getNativeFullscreenElement() && $('#modal').classList.contains('reader-fullscreen')){
+      lastNativeFullscreenExitAt = Date.now();
+      exitReadingFullscreen({skipNative:true});
+    }else{
+      updateFullscreenButton();
+    }
+  });
+  document.addEventListener('keydown', e=>{
+    if(e.key!=='Escape' || !$('#modal').classList.contains('open')) return;
+    if(Date.now() - lastNativeFullscreenExitAt < 350){
+      e.preventDefault();
+      return;
+    }
+    if(isReadingFullscreen()){
+      e.preventDefault();
+      exitReadingFullscreen();
+    }else{
+      closeDiary();
+    }
+  });
 }
 document.addEventListener('DOMContentLoaded', init);
 </script>
