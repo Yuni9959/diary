@@ -1,0 +1,15 @@
+name = "diary-pwa-api"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+# Public/non-secret configuration.
+# Replace these before deployment.
+GITHUB_OWNER = "YOUR_GITHUB_OWNER"
+GITHUB_REPO = "YOUR_REPOSITORY_NAME"
+GITHUB_BRANCH = "main"
+ALLOWED_ORIGINS = "http://localhost:8000,https://YOUR_SITE.example"
+
+# Secrets must be configured with Wrangler or the Cloudflare dashboard:
+# wrangler secret put GITHUB_TOKEN
+# wrangler secret put WRITE_TOKEN
