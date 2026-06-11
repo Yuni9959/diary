@@ -1,0 +1,99 @@
+name: Diary sync and Pages deploy
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "Diary_formyWife/inbox/new/**"
+      - "Diary_formyWife/obsidian/**"
+      - "Diary_formyWife/tools/diary_pipeline.py"
+      - "index.html"
+      - "manifest.webmanifest"
+      - "sw.js"
+      - "icons/**"
+      - "img/**"
+      - ".github/workflows/diary-sync.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-diary:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Sync diary static data
+        working-directory: Diary_formyWife
+        run: python tools/diary_pipeline.py sync
+
+      - name: Commit generated diary files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Diary_formyWife/obsidian Diary_formyWife/data Diary_formyWife/inbox Diary_formyWife/DIARY_PIPELINE_REPORT.md
+          if git diff --cached --quiet; then
+            echo "No generated diary changes to commit."
+          else
+            git commit -m "Update diary data"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+
+      - name: Build Pages artifact
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          root = Path.cwd()
+          site = root / "_site"
+          if site.exists():
+              shutil.rmtree(site)
+          site.mkdir()
+
+          for name in ("index.html", "manifest.webmanifest", "sw.js"):
+              src = root / name
+              if src.exists():
+                  shutil.copy2(src, site / name)
+
+          for name in ("icons", "img"):
+              src = root / name
+              if src.exists():
+                  shutil.copytree(src, site / name)
+
+          data_src = root / "Diary_formyWife" / "data"
+          data_dest = site / "Diary_formyWife" / "data"
+          if data_src.exists():
+              data_dest.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copytree(data_src, data_dest)
+          PY
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "_site"
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

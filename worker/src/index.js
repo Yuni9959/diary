@@ -120,7 +120,7 @@ function makeInboxPath(payload) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 24) || 'pwa';
   const suffix = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  return `inbox/new/${payload.date}-${suffix}-${safeClient}.txt`;
+  return `Diary_formyWife/inbox/new/${payload.date}-${suffix}-${safeClient}.txt`;
 }
 
 function makeDiaryText(payload) {

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'diary-pwa-v2';
+const CACHE_VERSION = 'diary-pwa-v3';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const DATA_CACHE = `${CACHE_VERSION}-data`;
 

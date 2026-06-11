@@ -34,7 +34,7 @@ Test-Item "download txt button exists" ($Html -match 'id="downloadDraftBtn"')
 Test-Item "restore draft button exists" ($Html -match 'id="restoreDraftBtn"')
 Test-Item "localStorage draft key exists" ($Html -match 'diaryWriterDraft:v1')
 Test-Item "download uses Blob" ($Html -match 'new Blob')
-Test-Item "no Phase 2 API call added" ($Html -notmatch '/api/diary')
+Test-Item "GitHub token is not in frontend" ($Html -notmatch 'GITHUB_TOKEN')
 
 if ($Failures -eq 0) {
   Write-Host ""

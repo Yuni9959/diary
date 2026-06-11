@@ -373,6 +373,18 @@
     border-color:rgba(196,154,94,.58); background:rgba(196,154,94,.14);
   }
   .writer-status{ min-height:1.4em; font-size:.82rem; color:var(--ink-soft); line-height:1.55; }
+  .writer-settings{
+    border:1px solid rgba(75,66,58,.1); border-radius:16px;
+    padding:12px; background:rgba(255,253,248,.48);
+    display:grid; gap:10px;
+  }
+  .writer-settings summary{
+    cursor:pointer; color:var(--ink-soft); font-size:.86rem; font-weight:700;
+  }
+  .writer-outbox{
+    font-size:.82rem; color:var(--ink-soft); line-height:1.55;
+    padding:10px 12px; border-radius:14px; background:rgba(196,154,94,.08);
+  }
   @media (max-width:480px){
     .writer-actions{ grid-template-columns:1fr; }
   }
@@ -469,12 +481,26 @@
           <label for="writerBody">본문</label>
           <textarea id="writerBody" name="body" placeholder="여기에 긴 일기를 적어 주세요."></textarea>
         </div>
+        <details class="writer-settings" id="writerSettings">
+          <summary>업로드 설정</summary>
+          <div class="writer-field">
+            <label for="writerApiUrl">Worker API URL</label>
+            <input id="writerApiUrl" name="apiUrl" type="url" placeholder="https://your-worker.example.workers.dev/api/diary" autocomplete="off" />
+          </div>
+          <div class="writer-field">
+            <label for="writerToken">쓰기 토큰</label>
+            <input id="writerToken" name="writeToken" type="password" placeholder="Worker WRITE_TOKEN" autocomplete="off" />
+          </div>
+        </details>
         <div class="writer-actions">
           <button type="button" class="primary" id="saveDraftBtn">임시 저장</button>
+          <button type="button" class="primary" id="uploadDraftBtn">저장</button>
           <button type="button" id="downloadDraftBtn">txt 다운로드</button>
+          <button type="button" id="retryUploadBtn">다시 보내기</button>
           <button type="button" id="restoreDraftBtn">작성 중인 글 복구</button>
           <button type="button" id="clearDraftBtn">초기화</button>
         </div>
+        <div class="writer-outbox" id="writerOutbox">전송 대기 글 0개</div>
         <div class="writer-status" id="writerStatus" role="status" aria-live="polite"></div>
       </form>
     </div>
@@ -526,6 +552,10 @@ const ENTRY_CACHE = {};
 const TEXT_CACHE = {};
 let lastNativeFullscreenExitAt = 0;
 const WRITER_DRAFT_KEY = 'diaryWriterDraft:v1';
+const WRITER_SETTINGS_KEY = 'diaryWriterSettings:v1';
+const WRITER_TOKEN_SESSION_KEY = 'diaryWriterToken:session:v1';
+const WRITER_OUTBOX_KEY = 'diaryWriterOutbox:v1';
+const WRITER_ARCHIVE_KEY = 'diaryWriterArchive:v1';
 const $ = (s)=>document.querySelector(s);
 const pad = (n)=>String(n).padStart(2,'0');
 const keyOf = (y,m,d)=>`${y}-${pad(m+1)}-${pad(d)}`;
@@ -840,6 +870,8 @@ function writerEls(){
     date: $('#writerDate'),
     title: $('#writerTitleInput'),
     body: $('#writerBody'),
+    apiUrl: $('#writerApiUrl'),
+    token: $('#writerToken'),
     status: $('#writerStatus')
   };
 }
@@ -856,9 +888,34 @@ function setWriterStatus(message){
   const status = $('#writerStatus');
   if(status) status.textContent = message || '';
 }
+function readJsonStorage(key, fallback){
+  try{
+    const value = JSON.parse(localStorage.getItem(key) || 'null');
+    return value == null ? fallback : value;
+  }catch(_e){
+    return fallback;
+  }
+}
+function writeJsonStorage(key, value){
+  localStorage.setItem(key, JSON.stringify(value));
+}
+function saveWriterSettings(){
+  const els = writerEls();
+  writeJsonStorage(WRITER_SETTINGS_KEY, {
+    apiUrl: els.apiUrl.value.trim()
+  });
+  sessionStorage.setItem(WRITER_TOKEN_SESSION_KEY, els.token.value);
+}
+function restoreWriterSettings(){
+  const els = writerEls();
+  const settings = readJsonStorage(WRITER_SETTINGS_KEY, {});
+  els.apiUrl.value = settings.apiUrl || '';
+  els.token.value = sessionStorage.getItem(WRITER_TOKEN_SESSION_KEY) || '';
+}
 function saveWriterDraft(reason='임시 저장했어요.'){
   const draft = getWriterDraft();
   localStorage.setItem(WRITER_DRAFT_KEY, JSON.stringify(draft));
+  saveWriterSettings();
   setWriterStatus(`${reason} (${new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'})})`);
 }
 function readWriterDraft(){
@@ -890,11 +947,133 @@ function clearWriterDraft(){
   els.body.value = '';
   setWriterStatus('임시 저장 글을 비웠어요.');
 }
+function readWriterOutbox(){
+  const items = readJsonStorage(WRITER_OUTBOX_KEY, []);
+  return Array.isArray(items) ? items : [];
+}
+function saveWriterOutbox(items){
+  writeJsonStorage(WRITER_OUTBOX_KEY, items);
+  updateWriterOutbox();
+}
+function updateWriterOutbox(){
+  const el = $('#writerOutbox');
+  if(!el) return;
+  const count = readWriterOutbox().length;
+  el.textContent = count ? `전송 대기 글 ${count}개 - 네트워크가 안정적일 때 다시 보내세요.` : '전송 대기 글 0개';
+}
+function queueWriterDraft(draft, reason){
+  const items = readWriterOutbox();
+  items.push({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    draft,
+    reason: reason || 'upload_failed',
+    queuedAt: new Date().toISOString()
+  });
+  saveWriterOutbox(items);
+}
+function archiveUploadedDraft(draft, response){
+  const items = readJsonStorage(WRITER_ARCHIVE_KEY, []);
+  const archive = Array.isArray(items) ? items : [];
+  archive.unshift({
+    draft,
+    response,
+    uploadedAt: new Date().toISOString()
+  });
+  writeJsonStorage(WRITER_ARCHIVE_KEY, archive.slice(0, 20));
+}
 function formatDiaryTxt(draft){
   const [y,m,d] = String(draft.date || todayKey()).split('-').map(Number);
   const dateLine = `${y}년 ${m}월 ${d}일`;
   const title = draft.title ? `제목: ${draft.title}\n\n` : '';
   return `${dateLine}\n\n${title}${draft.body || ''}`.replace(/\r\n/g, '\n');
+}
+function validateUploadDraft(draft){
+  if(!draft.date) return '날짜를 먼저 선택해 주세요.';
+  if(!draft.body.trim()) return '본문을 적은 뒤 저장해 주세요.';
+  return '';
+}
+function writerApiSettings(){
+  const els = writerEls();
+  return {
+    apiUrl: els.apiUrl.value.trim(),
+    writeToken: els.token.value
+  };
+}
+async function postDiaryDraft(draft){
+  const settings = writerApiSettings();
+  if(!settings.apiUrl) throw new Error('Worker API URL을 입력해 주세요.');
+  if(!settings.writeToken) throw new Error('쓰기 토큰을 입력해 주세요.');
+  const res = await fetch(settings.apiUrl, {
+    method:'POST',
+    headers:{
+      'Content-Type':'application/json',
+      'Authorization':`Bearer ${settings.writeToken}`
+    },
+    body:JSON.stringify({
+      date:draft.date,
+      title:draft.title,
+      body:draft.body,
+      clientId:'pwa'
+    })
+  });
+  const payload = await res.json().catch(()=>({}));
+  if(!res.ok || !payload.ok){
+    throw new Error(payload.error || `업로드 실패 (${res.status})`);
+  }
+  return payload;
+}
+async function uploadWriterDraft(){
+  const draft = getWriterDraft();
+  const validation = validateUploadDraft(draft);
+  if(validation){
+    setWriterStatus(validation);
+    return;
+  }
+  saveWriterDraft('업로드 전 임시 저장했어요.');
+  if(!navigator.onLine){
+    queueWriterDraft(draft, 'offline');
+    setWriterStatus('오프라인이라 전송 대기함에 보관했어요. 온라인일 때 다시 보내기를 눌러 주세요.');
+    return;
+  }
+  setWriterStatus('업로드하고 있어요...');
+  try{
+    const result = await postDiaryDraft(draft);
+    archiveUploadedDraft(draft, result);
+    localStorage.removeItem(WRITER_DRAFT_KEY);
+    const els = writerEls();
+    els.title.value = '';
+    els.body.value = '';
+    setWriterStatus('업로드 완료. 곧 반영돼요.');
+  }catch(e){
+    queueWriterDraft(draft, e.message);
+    setWriterStatus(`업로드 실패. 글은 전송 대기함에 보관했어요. (${e.message})`);
+  }
+}
+async function retryWriterOutbox(){
+  saveWriterSettings();
+  let items = readWriterOutbox();
+  if(!items.length){
+    setWriterStatus('다시 보낼 글이 없어요.');
+    return;
+  }
+  if(!navigator.onLine){
+    setWriterStatus('현재 오프라인입니다. 온라인 상태에서 다시 보내 주세요.');
+    return;
+  }
+  setWriterStatus(`전송 대기 글 ${items.length}개를 다시 보내는 중이에요...`);
+  const remaining = [];
+  let sent = 0;
+  for(const item of items){
+    try{
+      const result = await postDiaryDraft(item.draft);
+      archiveUploadedDraft(item.draft, result);
+      sent++;
+    }catch(e){
+      remaining.push({...item, reason:e.message, lastTriedAt:new Date().toISOString()});
+    }
+  }
+  saveWriterOutbox(remaining);
+  setWriterStatus(`다시 보내기 완료: 성공 ${sent}개, 남은 글 ${remaining.length}개`);
 }
 function downloadWriterTxt(){
   const draft = getWriterDraft();
@@ -921,6 +1100,8 @@ function openWriter(){
   const els = writerEls();
   els.modal.classList.add('open');
   document.body.style.overflow='hidden';
+  restoreWriterSettings();
+  updateWriterOutbox();
   if(!restoreWriterDraft(false)){
     els.date.value = todayKey();
     setWriterStatus('새 글을 작성할 수 있어요. 입력 중 자동으로 임시 저장됩니다.');
@@ -969,14 +1150,19 @@ function init(){
   $('#openWriterBtn').addEventListener('click', openWriter);
   $('#writerCloseBtn').addEventListener('click', closeWriter);
   $('#saveDraftBtn').addEventListener('click', ()=>saveWriterDraft());
+  $('#uploadDraftBtn').addEventListener('click', uploadWriterDraft);
   $('#downloadDraftBtn').addEventListener('click', downloadWriterTxt);
+  $('#retryUploadBtn').addEventListener('click', retryWriterOutbox);
   $('#restoreDraftBtn').addEventListener('click', ()=>restoreWriterDraft(true));
   $('#clearDraftBtn').addEventListener('click', clearWriterDraft);
   ['input','change'].forEach(type=>{
     $('#writerDate').addEventListener(type, scheduleWriterAutoSave);
     $('#writerTitleInput').addEventListener(type, scheduleWriterAutoSave);
     $('#writerBody').addEventListener(type, scheduleWriterAutoSave);
+    $('#writerApiUrl').addEventListener(type, ()=>{ saveWriterSettings(); setWriterStatus('업로드 설정을 저장했어요.'); });
+    $('#writerToken').addEventListener(type, ()=>{ saveWriterSettings(); setWriterStatus('업로드 설정을 저장했어요.'); });
   });
+  window.addEventListener('online', ()=>{ updateWriterOutbox(); setWriterStatus('온라인 상태입니다. 전송 대기 글이 있으면 다시 보내기를 눌러 주세요.'); });
   $('#closeBtn').addEventListener('click', closeDiary);
   $('#fullscreenBtn').addEventListener('click', toggleReadingFullscreen);
   $('#modal').addEventListener('click', e=>{
