@@ -1,13 +1,34 @@
-const MAX_BODY_LENGTH = 120000;
+const SERVICE_NAME = 'diary-write-api';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DEFAULT_MAX_BODY_LENGTH = 200000;
+const MAX_TITLE_LENGTH = 120;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handleRequest(request, env);
+      return await handleRequest(request, env, ctx);
     } catch (error) {
-      console.warn('worker error', error);
-      return jsonResponse({ok: false, error: 'internal_error'}, 500, request, env);
+      if (error instanceof GithubWriteError) {
+        return jsonResponse(
+          {
+            ok: false,
+            error: 'github_error',
+            message: githubErrorMessage(error.githubStatus),
+            githubStatus: error.githubStatus
+          },
+          error.httpStatus,
+          request,
+          env
+        );
+      }
+
+      console.warn('worker_error', error?.message || error);
+      return jsonResponse(
+        { ok: false, error: 'github_error', message: '요청 처리 중 오류가 발생했습니다.' },
+        500,
+        request,
+        env
+      );
     }
   }
 };
@@ -15,67 +36,217 @@ export default {
 async function handleRequest(request, env) {
   const url = new URL(request.url);
 
-  if (request.method === 'OPTIONS') {
-    return corsPreflight(request, env);
+  if (request.method === 'OPTIONS' && url.pathname === '/api/diary') {
+    return handlePreflight(request, env);
+  }
+
+  if (request.method === 'GET' && url.pathname === '/health') {
+    return jsonResponse({ ok: true, service: SERVICE_NAME }, 200, request, env);
   }
 
   if (url.pathname !== '/api/diary') {
-    return jsonResponse({ok: false, error: 'not_found'}, 404, request, env);
+    return jsonResponse(
+      { ok: false, error: 'not_found', message: '존재하지 않는 엔드포인트입니다.' },
+      404,
+      request,
+      env
+    );
   }
 
   if (request.method !== 'POST') {
-    return jsonResponse({ok: false, error: 'method_not_allowed'}, 405, request, env);
+    return jsonResponse(
+      { ok: false, error: 'method_not_allowed', message: '허용되지 않는 메서드입니다.' },
+      405,
+      request,
+      env
+    );
   }
 
-  const origin = verifyOrigin(request, env);
-  if (!origin.ok) {
-    return jsonResponse({ok: false, error: origin.error}, 403, request, env);
+  const originCheck = checkOrigin(request, env);
+  if (!originCheck.ok) {
+    return jsonResponse(
+      { ok: false, error: 'origin_not_allowed', message: '허용되지 않은 출처입니다.' },
+      403,
+      request,
+      env
+    );
   }
 
-  const auth = verifyWriteToken(request, env);
-  if (!auth.ok) {
-    return jsonResponse({ok: false, error: auth.error}, auth.status, request, env);
+  const configCheck = checkConfig(env);
+  if (!configCheck.ok) {
+    return jsonResponse(
+      { ok: false, error: 'config_missing', message: 'Worker 설정이 누락되었습니다.' },
+      500,
+      request,
+      env
+    );
+  }
+
+  const authCheck = checkWriteToken(request, env);
+  if (!authCheck.ok) {
+    return jsonResponse(
+      { ok: false, error: 'unauthorized', message: '인증에 실패했습니다.' },
+      401,
+      request,
+      env
+    );
+  }
+
+  if (!isJsonRequest(request)) {
+    return jsonResponse(
+      { ok: false, error: 'invalid_json', message: 'JSON 요청만 처리할 수 있습니다.' },
+      400,
+      request,
+      env
+    );
   }
 
   let payload;
   try {
     payload = await request.json();
   } catch (_error) {
-    return jsonResponse({ok: false, error: 'invalid_json'}, 400, request, env);
+    return jsonResponse(
+      { ok: false, error: 'invalid_json', message: 'JSON 형식이 올바르지 않습니다.' },
+      400,
+      request,
+      env
+    );
   }
 
-  const validation = validateDiaryPayload(payload);
+  const validation = validateDiaryPayload(payload, env);
   if (!validation.ok) {
-    return jsonResponse({ok: false, error: validation.error}, 400, request, env);
+    return jsonResponse(
+      { ok: false, error: validation.error, message: validation.message },
+      400,
+      request,
+      env
+    );
   }
 
-  const githubConfig = validateGithubEnv(env);
-  if (!githubConfig.ok) {
-    return jsonResponse({ok: false, error: githubConfig.error}, 500, request, env);
-  }
+  const entry = validation.entry;
+  const created = await createDiaryFileWithRetry(entry, env);
 
-  const filePath = makeInboxPath(payload);
-  const content = makeDiaryText(payload);
-  const result = await createGithubFile(filePath, content, payload, env);
-
-  return jsonResponse({
-    ok: true,
-    path: filePath,
-    commitSha: result.commit?.sha || null,
-    contentUrl: result.content?.html_url || null
-  }, 201, request, env);
+  return jsonResponse(
+    {
+      ok: true,
+      path: created.path,
+      commitSha: created.commitSha,
+      htmlUrl: created.htmlUrl,
+      updated: created.updated
+    },
+    created.updated ? 200 : 201,
+    request,
+    env
+  );
 }
 
-function validateDiaryPayload(payload) {
-  if (!payload || typeof payload !== 'object') return {ok: false, error: 'payload_required'};
-  if (typeof payload.date !== 'string' || !DATE_RE.test(payload.date)) return {ok: false, error: 'invalid_date'};
-  if (!isRealDate(payload.date)) return {ok: false, error: 'invalid_date'};
-  if (typeof payload.body !== 'string' || payload.body.trim().length < 1) return {ok: false, error: 'body_required'};
-  if (payload.body.length > MAX_BODY_LENGTH) return {ok: false, error: 'body_too_long'};
-  if (payload.title != null && typeof payload.title !== 'string') return {ok: false, error: 'invalid_title'};
-  if (payload.title && payload.title.length > 120) return {ok: false, error: 'title_too_long'};
-  if (payload.clientId != null && typeof payload.clientId !== 'string') return {ok: false, error: 'invalid_client_id'};
-  return {ok: true};
+function handlePreflight(request, env) {
+  const originCheck = checkOrigin(request, env);
+  if (!originCheck.ok) {
+    return new Response(null, { status: 403, headers: { Vary: 'Origin' } });
+  }
+
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders(request, env)
+  });
+}
+
+function checkConfig(env) {
+  const required = ['GITHUB_TOKEN', 'WRITE_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO'];
+  return { ok: required.every((key) => Boolean(env[key])) };
+}
+
+function checkWriteToken(request, env) {
+  if (!env.WRITE_TOKEN) return { ok: false };
+
+  const auth = request.headers.get('Authorization') || '';
+  const bearerToken = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  const headerToken = request.headers.get('X-Write-Token') || '';
+
+  return { ok: bearerToken === env.WRITE_TOKEN || headerToken === env.WRITE_TOKEN };
+}
+
+function checkOrigin(request, env) {
+  const origin = request.headers.get('Origin');
+  if (!origin) return { ok: true };
+  return { ok: allowedOrigins(env).includes(origin) };
+}
+
+function allowedOrigins(env) {
+  return String(env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+}
+
+function isJsonRequest(request) {
+  const contentType = request.headers.get('Content-Type') || '';
+  return contentType.toLowerCase().includes('application/json');
+}
+
+function validateDiaryPayload(payload, env) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return { ok: false, error: 'invalid_json', message: '요청 본문은 JSON 객체여야 합니다.' };
+  }
+
+  if (typeof payload.date !== 'string' || !DATE_RE.test(payload.date) || !isRealDate(payload.date)) {
+    return { ok: false, error: 'invalid_date', message: 'date는 실제 존재하는 YYYY-MM-DD 날짜여야 합니다.' };
+  }
+
+  if (payload.title != null && typeof payload.title !== 'string') {
+    return { ok: false, error: 'invalid_body', message: 'title은 문자열이어야 합니다.' };
+  }
+
+  const title = normalizeTitle(payload.title, payload.date);
+  if (title.length > MAX_TITLE_LENGTH) {
+    return { ok: false, error: 'invalid_body', message: `title은 ${MAX_TITLE_LENGTH}자 이하여야 합니다.` };
+  }
+
+  if (typeof payload.body !== 'string') {
+    return { ok: false, error: 'invalid_body', message: 'body는 필수 문자열입니다.' };
+  }
+
+  const body = payload.body.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!body.trim()) {
+    return { ok: false, error: 'invalid_body', message: 'body는 비어 있을 수 없습니다.' };
+  }
+
+  const maxBodyLength = parseMaxBodyLength(env);
+  if (body.length > maxBodyLength) {
+    return { ok: false, error: 'invalid_body', message: `body는 ${maxBodyLength}자 이하여야 합니다.` };
+  }
+
+  const clientId = sanitizeClientId(payload.clientId);
+
+  return {
+    ok: true,
+    entry: {
+      date: payload.date,
+      title,
+      body,
+      clientId,
+      createdAt: new Date()
+    }
+  };
+}
+
+function normalizeTitle(value, date) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed || date;
+}
+
+function sanitizeClientId(value) {
+  const sanitized = String(value || 'pwa')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '')
+    .slice(0, 40);
+  return sanitized || 'pwa';
+}
+
+function parseMaxBodyLength(env) {
+  const parsed = Number.parseInt(env.MAX_BODY_LENGTH || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_BODY_LENGTH;
 }
 
 function isRealDate(value) {
@@ -86,102 +257,138 @@ function isRealDate(value) {
     && date.getUTCDate() === day;
 }
 
-function verifyOrigin(request, env) {
-  const origin = request.headers.get('Origin');
-  if (!origin) return {ok: true};
-  if (resolveAllowedOrigin(origin, env)) return {ok: true};
-  return {ok: false, error: 'origin_not_allowed'};
+async function createDiaryFileWithRetry(entry, env) {
+  const content = makeDiaryText(entry);
+  const basePath = makeInboxPath(entry);
+  const candidates = [
+    basePath,
+    withRetrySuffix(basePath, 2),
+    withRetrySuffix(basePath, 3)
+  ];
+
+  let lastError;
+  for (const path of candidates) {
+    const result = await putGithubContent(path, content, entry, env);
+    if (result.ok) return { ...result, path };
+    if (result.status !== 409) throw new GithubWriteError(result.status);
+    lastError = result;
+  }
+
+  throw new GithubWriteError(lastError?.status || 409);
 }
 
-function verifyWriteToken(request, env) {
-  if (!env.WRITE_TOKEN) return {ok: false, status: 500, error: 'write_token_not_configured'};
-
-  const auth = request.headers.get('Authorization') || '';
-  const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-  const headerToken = request.headers.get('X-Write-Token') || '';
-  const token = bearer || headerToken;
-
-  if (!token) return {ok: false, status: 401, error: 'write_token_required'};
-  if (token !== env.WRITE_TOKEN) return {ok: false, status: 403, error: 'write_token_invalid'};
-  return {ok: true};
+function makeInboxPath(entry) {
+  const timestamp = formatKoreaTimestamp(entry.createdAt);
+  return `inbox/new/${entry.date}-${timestamp}-${entry.clientId}.txt`;
 }
 
-function validateGithubEnv(env) {
-  const required = ['GITHUB_TOKEN', 'GITHUB_OWNER', 'GITHUB_REPO'];
-  const missing = required.filter(name => !env[name]);
-  if (missing.length) return {ok: false, error: `missing_env:${missing.join(',')}`};
-  return {ok: true};
+function withRetrySuffix(path, retryNumber) {
+  return path.replace(/\.txt$/, `-${retryNumber}.txt`);
 }
 
-function makeInboxPath(payload) {
-  const safeClient = String(payload.clientId || 'pwa')
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'pwa';
-  const suffix = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
-  return `Diary_formyWife/inbox/new/${payload.date}-${suffix}-${safeClient}.txt`;
+function formatKoreaTimestamp(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+    hourCycle: 'h23'
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return `${get('year')}${get('month')}${get('day')}${get('hour')}${get('minute')}${get('second')}`;
 }
 
-function makeDiaryText(payload) {
-  const [year, month, day] = payload.date.split('-').map(Number);
-  const dateLine = `${year}년 ${month}월 ${day}일`;
-  const title = payload.title && payload.title.trim()
-    ? `제목: ${payload.title.trim()}\n\n`
-    : '';
-  return `${dateLine}\n\n${title}${payload.body.replace(/\r\n/g, '\n')}\n`;
+function makeDiaryText(entry) {
+  const [year, month, day] = entry.date.split('-').map(Number);
+  return [
+    `${year}년 ${month}월 ${day}일`,
+    '',
+    `제목: ${entry.title}`,
+    `작성 경로: ${entry.clientId}`,
+    `작성 시각: ${entry.createdAt.toISOString()}`,
+    '',
+    entry.body
+  ].join('\n');
 }
 
-async function createGithubFile(path, text, payload, env) {
+async function putGithubContent(path, content, entry, env) {
   const owner = encodeURIComponent(env.GITHUB_OWNER);
   const repo = encodeURIComponent(env.GITHUB_REPO);
   const branch = env.GITHUB_BRANCH || 'main';
-  const endpoint = `https://api.github.com/repos/${owner}/${repo}/contents/${encodePath(path)}`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeGithubPath(path)}`;
 
-  const response = await fetch(endpoint, {
+  const response = await fetch(url, {
     method: 'PUT',
     headers: {
-      'Accept': 'application/vnd.github+json',
-      'Authorization': `Bearer ${env.GITHUB_TOKEN}`,
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
-      'User-Agent': 'diary-pwa-worker',
-      'X-GitHub-Api-Version': '2022-11-28'
+      'User-Agent': 'diary-write-worker'
     },
     body: JSON.stringify({
-      message: `Add diary draft ${payload.date}`,
-      content: base64Utf8(text),
+      message: `Add diary entry ${entry.date} from PWA`,
+      content: base64Utf8(content),
       branch
     })
   });
 
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    console.warn('github create failed', response.status, result);
-    throw new Error(`github_create_failed:${response.status}`);
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 201 || response.status === 200) {
+    return {
+      ok: true,
+      status: response.status,
+      updated: response.status === 200,
+      commitSha: body.commit?.sha || '',
+      htmlUrl: body.content?.html_url || ''
+    };
   }
-  return result;
+
+  console.warn('github_error_status', response.status);
+  return { ok: false, status: response.status };
 }
 
-function encodePath(path) {
+class GithubWriteError extends Error {
+  constructor(githubStatus) {
+    super(`github_error:${githubStatus}`);
+    this.githubStatus = githubStatus;
+    this.httpStatus = githubStatus >= 400 && githubStatus < 500 ? githubStatus : 502;
+  }
+}
+
+function githubErrorMessage(status) {
+  const messages = {
+    401: 'GitHub 인증에 실패했습니다. Worker secret 설정을 확인하세요.',
+    403: 'GitHub 저장 권한이 없거나 요청이 거부되었습니다.',
+    404: 'GitHub 저장소 또는 저장 경로를 찾을 수 없습니다.',
+    409: '같은 파일명이 이미 존재해 저장에 실패했습니다.',
+    422: 'GitHub API 요청 형식이 거부되었습니다.'
+  };
+  return messages[status] || 'GitHub 저장 중 오류가 발생했습니다.';
+}
+
+function encodeGithubPath(path) {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
 function base64Utf8(value) {
   const bytes = new TextEncoder().encode(value);
   let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
   return btoa(binary);
 }
 
-function corsPreflight(request, env) {
-  return new Response(null, {
-    status: 204,
-    headers: corsHeaders(request, env)
-  });
-}
-
 function jsonResponse(payload, status, request, env) {
-  return new Response(JSON.stringify(payload), {
+  const responsePayload = normalizeErrorPayload(payload, status);
+  return new Response(JSON.stringify(responsePayload), {
     status,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
@@ -190,26 +397,35 @@ function jsonResponse(payload, status, request, env) {
   });
 }
 
+function normalizeErrorPayload(payload, status) {
+  if (payload.ok !== false || payload.message) return payload;
+  const fallbackMessages = {
+    method_not_allowed: '허용되지 않는 메서드입니다.',
+    origin_not_allowed: '허용되지 않은 출처입니다.',
+    unauthorized: '인증에 실패했습니다.',
+    invalid_json: 'JSON 형식이 올바르지 않습니다.',
+    invalid_date: '날짜 형식이 올바르지 않습니다.',
+    invalid_body: '본문 형식이 올바르지 않습니다.',
+    config_missing: 'Worker 설정이 누락되었습니다.',
+    github_error: 'GitHub 저장 중 오류가 발생했습니다.'
+  };
+  return {
+    ...payload,
+    message: fallbackMessages[payload.error] || `요청 처리에 실패했습니다. (${status})`
+  };
+}
+
 function corsHeaders(request, env) {
-  const origin = request.headers.get('Origin') || '';
-  const allowedOrigin = resolveAllowedOrigin(origin, env);
+  const origin = request.headers.get('Origin');
   const headers = {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Write-Token',
-    'Access-Control-Max-Age': '86400',
-    'Vary': 'Origin'
+    Vary: 'Origin'
   };
-  if (allowedOrigin) headers['Access-Control-Allow-Origin'] = allowedOrigin;
-  return headers;
-}
 
-function resolveAllowedOrigin(origin, env) {
-  if (!origin) return '';
-  const list = String(env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map(item => item.trim())
-    .filter(Boolean);
-  if (list.includes('*')) return origin;
-  if (list.includes(origin)) return origin;
-  return '';
+  if (origin && allowedOrigins(env).includes(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+  }
+
+  return headers;
 }
