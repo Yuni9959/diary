@@ -420,6 +420,34 @@ def unique_target(path: Path) -> Path:
         i += 1
 
 
+def processed_history_paths(name: str) -> list[Path]:
+    paths: list[Path] = []
+    for folder in (INBOX_PROCESSED, INBOX_REJECTED):
+        if not folder.exists():
+            continue
+        paths.extend(path for path in folder.rglob(name) if path.is_file())
+    return sorted(paths)
+
+
+def already_processed(path: Path, text: str) -> Path | None:
+    for history_path in processed_history_paths(path.name):
+        try:
+            history_text, _encoding = read_text(history_path)
+        except Exception:
+            continue
+        if history_text == text:
+            return history_path
+    return None
+
+
+def skip_duplicate_input(path: Path, history_path: Path, report: dict) -> None:
+    path.unlink()
+    report["skipped_files"] += 1
+    report["warnings"].append(
+        f"{path.name}: 이미 처리된 동일한 파일이라 건너뜀 ({history_path.relative_to(ROOT)})"
+    )
+
+
 def move_processed(path: Path, keys: list[str]) -> None:
     year = keys[0][:4] if keys else str(now().year)
     target_dir = INBOX_PROCESSED / year
@@ -441,6 +469,10 @@ def process_inbox_file(path: Path, run_stamp: str, report: dict) -> None:
         text, encoding = read_text(path)
     except Exception as exc:
         reject_file(path, f"읽기 실패: {exc}", report)
+        return
+    history_path = already_processed(path, text)
+    if history_path:
+        skip_duplicate_input(path, history_path, report)
         return
     fallback = date_from_filename(path)
     sections, warnings = parse_dated_sections(text, fallback)
@@ -520,6 +552,7 @@ def new_report(command: str) -> dict:
         "run_at": iso_now(),
         "command": command,
         "processed_files": 0,
+        "skipped_files": 0,
         "created_md": 0,
         "updated_md": 0,
         "rejected_files": 0,
@@ -540,6 +573,7 @@ def write_report(report: dict) -> None:
         f"- 실행 시각: {report['run_at']}",
         f"- 실행 명령: {report['command']}",
         f"- 처리한 inbox 파일 수: {report['processed_files']}",
+        f"- 건너뛴 중복 파일 수: {report['skipped_files']}",
         f"- 생성한 md 파일 수: {report['created_md']}",
         f"- 갱신한 md 파일 수: {report['updated_md']}",
         f"- rejected 파일 수: {report['rejected_files']}",

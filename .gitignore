@@ -1,3 +1,9 @@
 Diary_formyWife/DIARY_PIPELINE_REPORT.md
 __pycache__/
 *.pyc
+backups/
+Diary_formyWife/backups/
+Diary_formyWife/inbox/processed/*
+!Diary_formyWife/inbox/processed/.gitkeep
+Diary_formyWife/inbox/rejected/*
+!Diary_formyWife/inbox/rejected/.gitkeep
