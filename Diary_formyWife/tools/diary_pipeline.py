@@ -70,6 +70,18 @@ def normalize_newlines(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def write_text_if_changed(path: Path, text: str, *, encoding: str = "utf-8", newline: str | None = "\n") -> bool:
+    if path.exists():
+        try:
+            if path.read_text(encoding=encoding) == text:
+                return False
+        except UnicodeDecodeError:
+            pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding=encoding, newline=newline)
+    return True
+
+
 def read_text(path: Path) -> tuple[str, str]:
     data = path.read_bytes()
     last_error: Exception | None = None
@@ -297,8 +309,7 @@ def write_diary_index(keys: list[str]) -> None:
             current_month = month
         lines.append(f"- {wikilink(key)}")
     lines.append("")
-    (OBSIDIAN_DIR / "Diary Index.md").parent.mkdir(parents=True, exist_ok=True)
-    (OBSIDIAN_DIR / "Diary Index.md").write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    write_text_if_changed(OBSIDIAN_DIR / "Diary Index.md", "\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def add_or_append_md(key: str, body: str, source: str, run_stamp: str, report: dict) -> None:
@@ -352,14 +363,14 @@ def build_web(report: dict | None = None) -> dict:
     if report is None:
         report = new_report("build-web")
     entries, warnings = read_md_entries()
-    for folder in (DATA_DIR / "entries", DATA_DIR / "texts"):
-        folder.mkdir(parents=True, exist_ok=True)
-        for path in folder.glob("*"):
-            if path.is_file():
-                path.unlink()
+    entries_dir = DATA_DIR / "entries"
+    texts_dir = DATA_DIR / "texts"
+    entries_dir.mkdir(parents=True, exist_ok=True)
+    texts_dir.mkdir(parents=True, exist_ok=True)
     PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
 
     index: dict[str, dict] = {}
+    desired_files: set[Path] = set()
     for key in sorted(entries):
         item = entries[key]
         photos = item["photos"]
@@ -375,12 +386,18 @@ def build_web(report: dict | None = None) -> dict:
             "sourceMd": item["sourceMd"],
             "photos": photos,
         }
-        entry_path_for(key).write_text(json.dumps(entry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        text_path_for(key).write_text(item["body"], encoding="utf-8", newline="\n")
+        entry_path = entry_path_for(key)
+        text_path = text_path_for(key)
+        desired_files.update((entry_path, text_path))
+        write_text_if_changed(entry_path, json.dumps(entry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        write_text_if_changed(text_path, item["body"], encoding="utf-8", newline="\n")
 
-    (DATA_DIR / "diary-index.json").write_text(
-        json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    for folder in (entries_dir, texts_dir):
+        for path in folder.glob("*"):
+            if path.is_file() and path not in desired_files:
+                path.unlink()
+
+    write_text_if_changed(DATA_DIR / "diary-index.json", json.dumps(index, ensure_ascii=False, indent=2) + "\n")
     report["data_entries"] = len(entries)
     report["warnings"].extend(warnings)
     if entries:
@@ -480,12 +497,15 @@ def import_diart() -> dict:
 
 
 def git_status() -> str:
-    if not (ROOT / ".git").exists():
+    git_root = ROOT
+    while git_root != git_root.parent and not (git_root / ".git").exists():
+        git_root = git_root.parent
+    if not (git_root / ".git").exists():
         return "Git 저장소가 아닙니다."
     try:
         proc = subprocess.run(
             ["git", "status", "--short"],
-            cwd=ROOT,
+            cwd=git_root,
             text=True,
             capture_output=True,
             check=False,
@@ -540,7 +560,7 @@ def write_report(report: dict) -> None:
     lines.extend(["", "## 경고", ""])
     lines.extend([f"- {item}" for item in report["warnings"]] or ["- 없음"])
     lines.extend(["", "## Git status", "", "```text", git, "```", ""])
-    REPORT_PATH.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    write_text_if_changed(REPORT_PATH, "\n".join(lines), encoding="utf-8", newline="\n")
 
 
 def status() -> None:
