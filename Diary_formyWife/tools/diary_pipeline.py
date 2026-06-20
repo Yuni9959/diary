@@ -255,6 +255,14 @@ def replace_body(md_text: str, new_body: str) -> str:
     return md_text[: start + len(BODY_START)] + "\n" + new_body.rstrip() + "\n" + md_text[end:]
 
 
+def body_already_present(existing_body: str, new_body: str) -> bool:
+    wanted = new_body.strip("\n")
+    if not wanted:
+        return True
+    parts = re.split(r"(?:^|\n)---\n<!-- appended-from-inbox: [^\n]+ -->\n", existing_body.strip("\n"))
+    return any(part.strip("\n") == wanted for part in parts)
+
+
 def make_md(key: str, body: str, source: str, prev_key: str | None, next_key: str | None) -> str:
     nav = []
     if prev_key:
@@ -272,7 +280,7 @@ def make_md(key: str, body: str, source: str, prev_key: str | None, next_key: st
         "  - diary\n"
         "  - for-wife\n"
         "photos: []\n"
-        f"source: {source}\n"
+        f"source: {json.dumps(source, ensure_ascii=False)}\n"
         f"web_entry: data/entries/{key}.json\n"
         f"web_text: data/texts/{key}.txt\n"
         f"{GENERATED_MARKER}\n"
@@ -312,7 +320,7 @@ def write_diary_index(keys: list[str]) -> None:
     write_text_if_changed(OBSIDIAN_DIR / "Diary Index.md", "\n".join(lines), encoding="utf-8", newline="\n")
 
 
-def add_or_append_md(key: str, body: str, source: str, run_stamp: str, report: dict) -> None:
+def add_or_append_md(key: str, body: str, source: str, run_stamp: str, report: dict) -> str:
     path = md_path_for(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     all_keys = sorted(set(existing_keys() + [key]))
@@ -321,17 +329,23 @@ def add_or_append_md(key: str, body: str, source: str, run_stamp: str, report: d
     next_key = all_keys[idx + 1] if idx < len(all_keys) - 1 else None
 
     if path.exists():
-        backup_file(path, run_stamp)
         old = path.read_text(encoding="utf-8")
         old_body = extract_body(old).rstrip()
+        if body_already_present(old_body, body):
+            report["skipped_entries"] += 1
+            report["warnings"].append(f"{source}: {key} 본문이 이미 있어 건너뜀")
+            return "skipped"
+        backup_file(path, run_stamp)
         marker = f"---\n<!-- appended-from-inbox: {source} / {iso_now()} -->"
         merged = (old_body + "\n\n" + marker + "\n" + body.strip("\n")).strip("\n") + "\n"
         path.write_text(replace_body(old, merged), encoding="utf-8", newline="\n")
         report["updated_md"] += 1
         report["merged_dates"].append(key)
+        return "updated"
     else:
         path.write_text(make_md(key, body, source, prev_key, next_key), encoding="utf-8", newline="\n")
         report["created_md"] += 1
+        return "created"
 
 
 def read_md_entries() -> tuple[dict[str, dict], list[str]]:
@@ -481,13 +495,20 @@ def process_inbox_file(path: Path, run_stamp: str, report: dict) -> None:
         reject_file(path, "날짜를 찾지 못함", report)
         return
     processed_keys = []
+    wrote_any = False
     for key, bodies in sorted(sections.items()):
         for body in bodies:
-            add_or_append_md(key, body, path.name, run_stamp, report)
+            result = add_or_append_md(key, body, path.name, run_stamp, report)
+            if result != "skipped":
+                wrote_any = True
         processed_keys.append(key)
-    report["processed_files"] += 1
-    report["input_encodings"].append(f"{path.name}: {encoding}")
-    move_processed(path, processed_keys)
+    if wrote_any:
+        report["processed_files"] += 1
+        report["input_encodings"].append(f"{path.name}: {encoding}")
+        move_processed(path, processed_keys)
+    else:
+        path.unlink()
+        report["skipped_files"] += 1
 
 
 def sync() -> dict:
@@ -553,6 +574,7 @@ def new_report(command: str) -> dict:
         "command": command,
         "processed_files": 0,
         "skipped_files": 0,
+        "skipped_entries": 0,
         "created_md": 0,
         "updated_md": 0,
         "rejected_files": 0,
@@ -574,6 +596,7 @@ def write_report(report: dict) -> None:
         f"- 실행 명령: {report['command']}",
         f"- 처리한 inbox 파일 수: {report['processed_files']}",
         f"- 건너뛴 중복 파일 수: {report['skipped_files']}",
+        f"- 건너뛴 중복 본문 수: {report['skipped_entries']}",
         f"- 생성한 md 파일 수: {report['created_md']}",
         f"- 갱신한 md 파일 수: {report['updated_md']}",
         f"- rejected 파일 수: {report['rejected_files']}",

@@ -54,6 +54,7 @@ jobs:
             echo "No generated diary changes to commit."
           else
             git commit -m "Update diary data"
+            git pull --rebase origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }}
           fi
 
