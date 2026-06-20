@@ -31,6 +31,6 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 
 Write-Host ""
 Write-Host "확인 후 직접 실행할 Git 명령:"
-Write-Host "git add obsidian data inbox tools DAILY_DIARY_WORKFLOW.md DIARY_PIPELINE_REPORT.md"
+Write-Host "git add obsidian data inbox"
 Write-Host "git commit -m `"Update diary data`""
 Write-Host "git push"

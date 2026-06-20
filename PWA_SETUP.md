@@ -69,7 +69,7 @@ git push
 .\sync_diary.ps1
 py -3 -m http.server 8000
 git status
-git add obsidian data inbox tools DAILY_DIARY_WORKFLOW.md DIARY_PIPELINE_REPORT.md
+git add obsidian data inbox
 git commit -m "Update diary data"
 git push
 ```

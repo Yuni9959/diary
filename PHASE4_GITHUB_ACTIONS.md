@@ -12,7 +12,7 @@
 1. Worker가 `Diary_formyWife/inbox/new/*.txt` 파일을 push합니다.
 2. GitHub Actions가 실행됩니다.
 3. `python tools/diary_pipeline.py sync`를 `Diary_formyWife` 폴더에서 실행합니다.
-4. 생성/갱신된 `Diary_formyWife/obsidian`, `Diary_formyWife/data`, `Diary_formyWife/inbox`, `DIARY_PIPELINE_REPORT.md`를 commit합니다.
+4. 생성/갱신된 `Diary_formyWife/obsidian`, `Diary_formyWife/data`, `Diary_formyWife/inbox`를 commit합니다.
 5. `_site` 폴더에 Pages 공개 파일만 조립합니다.
 6. GitHub Pages artifact를 업로드하고 같은 워크플로 안에서 배포합니다.
 
