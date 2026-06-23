@@ -29,6 +29,8 @@ concurrency:
 jobs:
   build-diary:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
 
     steps:
       - name: Checkout
