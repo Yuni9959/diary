@@ -98,5 +98,10 @@
     "title": "2026년 6월 23일",
     "entryUrl": "data/entries/2026-06-23.json",
     "hasPhotos": false
+  },
+  "2026-07-01": {
+    "title": "2026년 7월 1일",
+    "entryUrl": "data/entries/2026-07-01.json",
+    "hasPhotos": false
   }
 }
