@@ -1,5 +1,5 @@
 {
-  "name": "당신을 위한 따뜻한 마음 모음",
+  "name": "당신을 위한 여름과 마음 모음",
   "short_name": "마음일기",
   "lang": "ko",
   "dir": "ltr",
@@ -11,7 +11,7 @@
   "theme_color": "#FAF4EA",
   "orientation": "portrait",
   "categories": ["lifestyle", "books", "personalization"],
-  "description": "소중한 사람에게 전하는 일기를 모아 보는 개인용 일기 앱",
+  "description": "소중한 사람에게 전하는 일기를 모아 보는 개인 일기장",
   "icons": [
     {
       "src": "icons/icon-192.png",

@@ -10,6 +10,14 @@ PWA_SETUP.md
 DATA_FORMAT.md
 diaries.json
 data/
+!Diary_formyWife/data/
+!Diary_formyWife/data/diary-index.json
+!Diary_formyWife/data/entries/
+!Diary_formyWife/data/entries/**
+!Diary_formyWife/data/texts/
+!Diary_formyWife/data/texts/**
+!Diary_formyWife/data/photos/
+!Diary_formyWife/data/photos/.gitkeep
 img/photo-sample-*.jpg
 Diary_formyWife/.obsidian/
 Diary_formyWife/diary_formyWife/
