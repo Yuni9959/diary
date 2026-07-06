@@ -14,6 +14,7 @@ on:
       - "sw.js"
       - "icons/**"
       - "img/**"
+      - "tools/write_supabase_runtime_config.mjs"
       - ".github/workflows/diary-sync.yml"
   workflow_dispatch:
 
@@ -60,6 +61,12 @@ jobs:
             git push origin HEAD:${{ github.ref_name }}
           fi
 
+      - name: Generate Supabase runtime config
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+        run: node tools/write_supabase_runtime_config.mjs
+
       - name: Build Pages artifact
         run: |
           python - <<'PY'
@@ -81,6 +88,12 @@ jobs:
               src = root / name
               if src.exists():
                   shutil.copytree(src, site / name)
+
+          runtime_config = root / "lib" / "supabase-runtime-config.js"
+          if runtime_config.exists():
+              lib_dest = site / "lib"
+              lib_dest.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(runtime_config, lib_dest / "supabase-runtime-config.js")
 
           data_src = root / "Diary_formyWife" / "data"
           data_dest = site / "Diary_formyWife" / "data"

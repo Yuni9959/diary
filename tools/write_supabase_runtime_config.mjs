@@ -39,17 +39,32 @@ function parseEnv(text) {
 function requireEnv(env) {
   const missing = REQUIRED_ENV.filter((key) => !env[key]);
   if (missing.length > 0) {
-    throw new Error(`Missing required .env.local values: ${missing.join(", ")}`);
+    throw new Error(`Missing required Supabase runtime config values: ${missing.join(", ")}`);
   }
 }
 
-async function main() {
-  if (!existsSync(ENV_PATH)) {
-    throw new Error(".env.local was not found.");
+async function loadRuntimeEnv() {
+  const ciEnv = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY: process.env.SUPABASE_PUBLISHABLE_KEY,
+  };
+
+  if (ciEnv.SUPABASE_URL || ciEnv.SUPABASE_PUBLISHABLE_KEY) {
+    requireEnv(ciEnv);
+    return ciEnv;
   }
 
-  const env = parseEnv(await readFile(ENV_PATH, "utf8"));
-  requireEnv(env);
+  if (!existsSync(ENV_PATH)) {
+    throw new Error(".env.local was not found and CI environment variables were not provided.");
+  }
+
+  const localEnv = parseEnv(await readFile(ENV_PATH, "utf8"));
+  requireEnv(localEnv);
+  return localEnv;
+}
+
+async function main() {
+  const env = await loadRuntimeEnv();
   await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
   await writeFile(
     OUTPUT_PATH,
