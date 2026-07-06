@@ -55,17 +55,14 @@ jobs:
             git push origin HEAD:${{ github.ref_name }}
           fi
 
-      - name: Generate Supabase runtime config
-        env:
-          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
-        run: node tools/write_supabase_runtime_config.mjs
-
       - name: Build Pages artifact
         run: |
           python - <<'PY'
           from pathlib import Path
+          import json
+          import os
           import shutil
+          from datetime import datetime, timezone
 
           root = Path.cwd()
           site = root / "_site"
@@ -85,7 +82,7 @@ jobs:
 
           lib_dest = site / "lib"
           lib_dest.mkdir(parents=True, exist_ok=True)
-          for name in ("supabase-client.js", "diary-service.js", "supabase-runtime-config.js"):
+          for name in ("supabase-client.js", "diary-service.js"):
               src = root / "lib" / name
               if src.exists():
                   shutil.copy2(src, lib_dest / name)
@@ -95,7 +92,72 @@ jobs:
           if data_src.exists():
               data_dest.parent.mkdir(parents=True, exist_ok=True)
               shutil.copytree(data_src, data_dest)
+
+          manifest = {
+              "commit_sha": os.environ.get("GITHUB_SHA", ""),
+              "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "has_runtime_config": True,
+              "included_files": [
+                  "lib/supabase-runtime-config.js",
+                  "lib/supabase-client.js",
+                  "lib/diary-service.js",
+              ],
+          }
+          (site / "deploy-manifest.json").write_text(
+              json.dumps(manifest, indent=2),
+              encoding="utf-8",
+          )
           PY
+
+      - name: Generate Supabase runtime config into artifact
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+          DIARY_RUNTIME_CONFIG_OUTPUT: _site/lib/supabase-runtime-config.js
+        run: node tools/write_supabase_runtime_config.mjs
+
+      - name: Verify Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          required_files=(
+            "_site/index.html"
+            "_site/sw.js"
+            "_site/lib/supabase-client.js"
+            "_site/lib/diary-service.js"
+            "_site/lib/supabase-runtime-config.js"
+          )
+
+          for file in "${required_files[@]}"; do
+            test -f "$file"
+          done
+
+          config="_site/lib/supabase-runtime-config.js"
+          grep -q "DIARY_SUPABASE_CONFIG" "$config"
+          grep -q "enabled" "$config"
+          grep -q "url" "$config"
+          grep -q "publishableKey" "$config"
+
+          forbidden_patterns=(
+            "service_role"
+            "DIARY_TEST_PASSWORD"
+            "DIARY_TEST_EMAIL"
+            "access_token"
+            "refresh_token"
+            "database password"
+            "secret key"
+          )
+
+          for pattern in "${forbidden_patterns[@]}"; do
+            if grep -qi "$pattern" "$config"; then
+              echo "Forbidden runtime config content detected: $pattern"
+              exit 1
+            fi
+          done
+
+          find _site/lib -maxdepth 1 -type f -printf "%p %s bytes\n"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
@@ -108,3 +170,27 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Verify live runtime config
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base="${PAGE_URL%/}"
+          url="${base}/lib/supabase-runtime-config.js?run=${GITHUB_RUN_ID}"
+          tmp="$(mktemp)"
+
+          for i in $(seq 1 24); do
+            if curl -fsS "$url" -o "$tmp" && grep -q "DIARY_SUPABASE_CONFIG" "$tmp"; then
+              echo "Live runtime config verified."
+              rm -f "$tmp"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Live runtime config verification failed."
+          rm -f "$tmp"
+          exit 1

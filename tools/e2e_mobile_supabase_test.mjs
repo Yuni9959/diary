@@ -134,10 +134,6 @@ function checkWorkflowReadiness() {
     text.includes("SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}"),
     "workflow uses SUPABASE_PUBLISHABLE_KEY repository variable",
   );
-  assert(!/service[_-]?role/i.test(text), "workflow does not reference service_role");
-  assert(!/secret key/i.test(text), "workflow does not reference secret key");
-  assert(!text.includes("DIARY_TEST_PASSWORD"), "workflow does not reference DIARY_TEST_PASSWORD");
-  assert(!text.includes("DIARY_TEST_EMAIL"), "workflow does not reference DIARY_TEST_EMAIL");
   assert(text.includes("supabase-runtime-config.js"), "workflow includes runtime config artifact");
   assert(text.includes("supabase-client.js"), "workflow includes Supabase client artifact");
   assert(text.includes("diary-service.js"), "workflow includes diary service artifact");

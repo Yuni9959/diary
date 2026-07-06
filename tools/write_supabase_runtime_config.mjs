@@ -3,8 +3,23 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const ENV_PATH = ".env.local";
-const OUTPUT_PATH = path.join("lib", "supabase-runtime-config.js");
+const DEFAULT_OUTPUT_PATH = path.join("lib", "supabase-runtime-config.js");
 const REQUIRED_ENV = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"];
+
+function parseArgs(argv) {
+  const outputIndex = argv.indexOf("--output");
+  if (outputIndex !== -1) {
+    const output = argv[outputIndex + 1];
+    if (!output) {
+      throw new Error("--output requires a path.");
+    }
+    return { outputPath: output };
+  }
+
+  return {
+    outputPath: process.env.DIARY_RUNTIME_CONFIG_OUTPUT || DEFAULT_OUTPUT_PATH,
+  };
+}
 
 function parseEnv(text) {
   const env = {};
@@ -64,10 +79,11 @@ async function loadRuntimeEnv() {
 }
 
 async function main() {
+  const { outputPath } = parseArgs(process.argv.slice(2));
   const env = await loadRuntimeEnv();
-  await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });
+  await mkdir(path.dirname(outputPath), { recursive: true });
   await writeFile(
-    OUTPUT_PATH,
+    outputPath,
     `window.DIARY_SUPABASE_CONFIG = ${JSON.stringify({
       enabled: true,
       url: env.SUPABASE_URL,
@@ -76,7 +92,7 @@ async function main() {
     "utf8",
   );
 
-  console.log(`runtime config written: ${OUTPUT_PATH}`);
+  console.log(`runtime config written: ${outputPath}`);
 }
 
 main().catch((error) => {
