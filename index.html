@@ -385,8 +385,22 @@
     font-size:.82rem; color:var(--ink-soft); line-height:1.55;
     padding:10px 12px; border-radius:14px; background:rgba(196,154,94,.08);
   }
+  .auth-sheet{ width:min(100%,440px); }
+  .auth-form{ display:grid; gap:14px; }
+  .auth-actions{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:4px; }
+  .auth-actions button{
+    border:1px solid var(--line); border-radius:14px;
+    background:rgba(255,253,248,.8); color:var(--ink);
+    min-height:42px; padding:0 10px; cursor:pointer;
+    font-family:var(--serif); font-weight:700;
+  }
+  .auth-actions button.primary{
+    border-color:rgba(196,154,94,.58); background:rgba(196,154,94,.14);
+  }
+  .auth-status{ min-height:1.4em; font-size:.82rem; color:var(--ink-soft); line-height:1.55; }
   @media (max-width:480px){
     .writer-actions{ grid-template-columns:1fr; }
+    .auth-actions{ grid-template-columns:1fr; }
   }
 
   @media (max-width:480px){
@@ -506,6 +520,33 @@
     </div>
   </div>
 
+  <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div class="sheet auth-sheet">
+      <div class="sheet__top">
+        <span class="sheet__date" id="authState">Supabase</span>
+        <div class="sheet__tools">
+          <button class="tbtn close" id="authCloseBtn" aria-label="Sign in close">×</button>
+        </div>
+      </div>
+      <h2 class="sheet__title" id="authTitle">Sign in</h2>
+      <form class="auth-form" id="authForm">
+        <div class="writer-field">
+          <label for="authEmail">Email</label>
+          <input id="authEmail" name="email" type="email" autocomplete="username" inputmode="email" />
+        </div>
+        <div class="writer-field">
+          <label for="authPassword">Password</label>
+          <input id="authPassword" name="password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="auth-actions">
+          <button type="submit" class="primary" id="authSignInBtn">Sign in</button>
+          <button type="button" id="authSignOutBtn">Sign out</button>
+        </div>
+        <div class="auth-status" id="authStatus" role="status" aria-live="polite"></div>
+      </form>
+    </div>
+  </div>
+
 <script src="lib/supabase-runtime-config.js"></script>
 <script>
 /* =============================================================
@@ -603,6 +644,89 @@ function sanitizeSupabaseEntry(entry){
   };
 }
 
+function authEls(){
+  return {
+    modal: $('#authModal'),
+    state: $('#authState'),
+    title: $('#authTitle'),
+    email: $('#authEmail'),
+    password: $('#authPassword'),
+    status: $('#authStatus'),
+    signIn: $('#authSignInBtn'),
+    signOut: $('#authSignOutBtn')
+  };
+}
+
+function setAuthStatus(message){
+  const els = authEls();
+  if(els.status) els.status.textContent = message || '';
+}
+
+function updateAuthModalState(){
+  const els = authEls();
+  const configured = !!diarySupabase;
+  const signedIn = hasSupabaseSession();
+  if(els.state) els.state.textContent = signedIn ? 'Signed in' : (configured ? 'Ready' : 'Not configured');
+  if(els.signIn) els.signIn.disabled = !configured || signedIn;
+  if(els.signOut) els.signOut.disabled = !configured || !signedIn;
+  if(els.email) els.email.disabled = !configured || signedIn;
+  if(els.password) els.password.disabled = !configured || signedIn;
+}
+
+async function openAuth(){
+  await diarySupabaseReady;
+  const els = authEls();
+  updateAuthModalState();
+  setAuthStatus(hasSupabaseSession() ? 'Already signed in.' : '');
+  els.modal.classList.add('open');
+  document.body.style.overflow='hidden';
+  setTimeout(()=>{ if(!hasSupabaseSession()) els.email.focus(); }, 120);
+}
+
+function closeAuth(){
+  const els = authEls();
+  els.password.value = '';
+  els.modal.classList.remove('open');
+  if(!$('#modal').classList.contains('open') && !$('#writerModal').classList.contains('open')) document.body.style.overflow='';
+}
+
+async function submitAuthForm(event){
+  event.preventDefault();
+  const service = await diarySupabaseReady;
+  const els = authEls();
+  if(!service){
+    setAuthStatus('Supabase is not configured.');
+    updateAuthModalState();
+    return;
+  }
+  setAuthStatus('Signing in...');
+  try{
+    await service.signInWithPassword(els.email.value, els.password.value);
+    els.password.value = '';
+    updateAuthModalState();
+    await loadData();
+    setAuthStatus('Signed in.');
+    setTimeout(()=>{ if(hasSupabaseSession()) closeAuth(); }, 450);
+  }catch(_e){
+    els.password.value = '';
+    setAuthStatus('Sign in failed. Please check the email and password.');
+    updateAuthModalState();
+  }
+}
+
+async function signOutFromAuth(){
+  const service = await diarySupabaseReady;
+  if(service) service.signOut();
+  updateAuthModalState();
+  await loadData();
+  setAuthStatus('Signed out.');
+}
+
+function shouldOpenAuthFromLocation(){
+  const params = new URLSearchParams(window.location.search);
+  return window.location.hash === '#auth' || params.get('auth') === '1';
+}
+
 function installDiarySupabaseAdmin(){
   window.diarySupabaseAdmin = {
     async status(){
@@ -637,6 +761,14 @@ function installDiarySupabaseAdmin(){
       if(service) service.signOut();
       await loadData();
       return {signedIn:false};
+    },
+    async openAuth(){
+      await openAuth();
+      return {opened:true};
+    },
+    closeAuth(){
+      closeAuth();
+      return {closed:true};
     },
     async listEntries(){
       const service = await diarySupabaseReady;
@@ -1304,6 +1436,9 @@ function init(){
   $('#retryUploadBtn').addEventListener('click', retryWriterOutbox);
   $('#restoreDraftBtn').addEventListener('click', ()=>restoreWriterDraft(true));
   $('#clearDraftBtn').addEventListener('click', clearWriterDraft);
+  $('#authForm').addEventListener('submit', submitAuthForm);
+  $('#authCloseBtn').addEventListener('click', closeAuth);
+  $('#authSignOutBtn').addEventListener('click', signOutFromAuth);
   ['input','change'].forEach(type=>{
     $('#writerDate').addEventListener(type, scheduleWriterAutoSave);
     $('#writerTitleInput').addEventListener(type, scheduleWriterAutoSave);
@@ -1318,6 +1453,20 @@ function init(){
     if(e.target===$('#modal') && !isReadingFullscreen()) closeDiary();
   });
   $('#writerModal').addEventListener('click', e=>{ if(e.target===$('#writerModal')) closeWriter(); });
+  $('#authModal').addEventListener('click', e=>{ if(e.target===$('#authModal')) closeAuth(); });
+  window.addEventListener('hashchange', ()=>{ if(window.location.hash==='#auth') openAuth(); });
+  if(shouldOpenAuthFromLocation()) setTimeout(openAuth, 0);
+  let titleTapCount = 0;
+  let titleTapTimer = null;
+  $('#headerText').addEventListener('click', ()=>{
+    titleTapCount++;
+    clearTimeout(titleTapTimer);
+    titleTapTimer = setTimeout(()=>{ titleTapCount = 0; }, 1400);
+    if(titleTapCount >= 5){
+      titleTapCount = 0;
+      openAuth();
+    }
+  });
   $('#fontUp').addEventListener('click', ()=>{ fontScale+=0.12; applyFont(); });
   $('#fontDown').addEventListener('click', ()=>{ fontScale-=0.12; applyFont(); });
   document.addEventListener('fullscreenchange', ()=>{
@@ -1337,6 +1486,11 @@ function init(){
     }
   });
   document.addEventListener('keydown', e=>{
+    if(e.key==='Escape' && $('#authModal').classList.contains('open')){
+      e.preventDefault();
+      closeAuth();
+      return;
+    }
     if(e.key==='Escape' && $('#writerModal').classList.contains('open')){
       e.preventDefault();
       closeWriter();

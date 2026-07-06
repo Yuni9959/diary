@@ -14,6 +14,7 @@ on:
       - "sw.js"
       - "icons/**"
       - "img/**"
+      - "lib/**"
       - "tools/write_supabase_runtime_config.mjs"
       - ".github/workflows/diary-sync.yml"
   workflow_dispatch:
@@ -43,6 +44,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
       - name: Sync diary static data
         working-directory: Diary_formyWife
@@ -89,11 +95,12 @@ jobs:
               if src.exists():
                   shutil.copytree(src, site / name)
 
-          runtime_config = root / "lib" / "supabase-runtime-config.js"
-          if runtime_config.exists():
-              lib_dest = site / "lib"
-              lib_dest.mkdir(parents=True, exist_ok=True)
-              shutil.copy2(runtime_config, lib_dest / "supabase-runtime-config.js")
+          lib_dest = site / "lib"
+          lib_dest.mkdir(parents=True, exist_ok=True)
+          for name in ("supabase-client.js", "diary-service.js", "supabase-runtime-config.js"):
+              src = root / "lib" / name
+              if src.exists():
+                  shutil.copy2(src, lib_dest / name)
 
           data_src = root / "Diary_formyWife" / "data"
           data_dest = site / "Diary_formyWife" / "data"

@@ -64,6 +64,10 @@ function isDataRequest(pathname) {
   return pathname.includes('/data/') || pathname.startsWith('/data/') || pathname.startsWith('/Diary_formyWife/data/');
 }
 
+function isRuntimeConfigRequest(pathname) {
+  return pathname.endsWith('/lib/supabase-runtime-config.js') || pathname.endsWith('/supabase-runtime-config.js');
+}
+
 async function networkFirst(request, cacheName, fallbackUrl) {
   const cache = await caches.open(cacheName);
   try {
@@ -107,6 +111,11 @@ self.addEventListener('fetch', event => {
 
   if (isDataRequest(url.pathname)) {
     event.respondWith(networkFirst(request, DATA_CACHE));
+    return;
+  }
+
+  if (isRuntimeConfigRequest(url.pathname)) {
+    event.respondWith(networkFirst(request, APP_CACHE));
     return;
   }
 
