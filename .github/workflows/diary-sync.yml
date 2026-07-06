@@ -14,6 +14,8 @@ on:
       - "sw.js"
       - "icons/**"
       - "img/**"
+      - "lib/**"
+      - "tools/write_supabase_runtime_config.mjs"
       - ".github/workflows/diary-sync.yml"
   workflow_dispatch:
 
@@ -43,6 +45,11 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Sync diary static data
         working-directory: Diary_formyWife
         run: python tools/diary_pipeline.py sync
@@ -59,6 +66,12 @@ jobs:
             git pull --rebase origin ${{ github.ref_name }}
             git push origin HEAD:${{ github.ref_name }}
           fi
+
+      - name: Generate Supabase runtime config
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+        run: node tools/write_supabase_runtime_config.mjs
 
       - name: Build Pages artifact
         run: |
@@ -81,6 +94,13 @@ jobs:
               src = root / name
               if src.exists():
                   shutil.copytree(src, site / name)
+
+          lib_dest = site / "lib"
+          lib_dest.mkdir(parents=True, exist_ok=True)
+          for name in ("supabase-client.js", "diary-service.js", "supabase-runtime-config.js"):
+              src = root / "lib" / name
+              if src.exists():
+                  shutil.copy2(src, lib_dest / name)
 
           data_src = root / "Diary_formyWife" / "data"
           data_dest = site / "Diary_formyWife" / "data"

@@ -28,3 +28,7 @@ Diary_formyWife/inbox/processed/*
 !Diary_formyWife/inbox/processed/.gitkeep
 Diary_formyWife/inbox/rejected/*
 !Diary_formyWife/inbox/rejected/.gitkeep
+.env.local
+.env.*.local
+.codex/config.toml
+lib/supabase-runtime-config.js
