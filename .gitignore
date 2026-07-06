@@ -31,3 +31,4 @@ Diary_formyWife/inbox/rejected/*
 .env.local
 .env.*.local
 .codex/config.toml
+lib/supabase-runtime-config.js
