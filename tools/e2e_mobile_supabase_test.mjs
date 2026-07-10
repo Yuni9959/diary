@@ -9,9 +9,7 @@ const ROOT = resolve(".");
 const ENV_PATH = ".env.local";
 const DEFAULT_PORT = 4173;
 const TEST_DATE = "2099-01-01";
-const EXPECTED_COUNT = 22;
-const EXPECTED_FIRST_DATE = "2026-02-27";
-const EXPECTED_LAST_DATE = "2026-07-05";
+const REQUIRED_PUBLIC_DATES = ["2026-02-27", "2026-07-10"];
 
 const MIME_TYPES = {
   ".html": "text/html;charset=utf-8",
@@ -152,14 +150,12 @@ function assert(condition, message) {
   }
 }
 
-function assertDates(dates, expectedCount) {
+function assertPublicDates(dates) {
   const sorted = [...dates].sort();
-  assert(dates.length === expectedCount, `expected ${expectedCount} dates, got ${dates.length}`);
-  assert(sorted[0] === EXPECTED_FIRST_DATE, `expected first date ${EXPECTED_FIRST_DATE}, got ${sorted[0] || "none"}`);
-  assert(
-    sorted[sorted.length - 1] === EXPECTED_LAST_DATE,
-    `expected last date ${EXPECTED_LAST_DATE}, got ${sorted[sorted.length - 1] || "none"}`,
-  );
+  assert(sorted.length >= REQUIRED_PUBLIC_DATES.length, `expected public dates, got ${sorted.length}`);
+  for (const date of REQUIRED_PUBLIC_DATES) {
+    assert(sorted.includes(date), `expected public date ${date} to be visible`);
+  }
 }
 
 async function generateRuntimeConfig() {
@@ -316,6 +312,7 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     isMobile: true,
     hasTouch: true,
     deviceScaleFactor: 2,
+    serviceWorkers: "block",
   });
   const page = await context.newPage();
   const browserEvents = [];
@@ -335,9 +332,32 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
 
     await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
     await waitForAdmin(page);
+    await page.evaluate(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitForAdmin(page);
     let currentStatus = await status(page);
     assert(currentStatus.configured === true, "runtime config was not active");
+    const storageState = await page.evaluate(() => ({
+      localStorageKeys: Object.keys(localStorage).sort(),
+      hasSupabaseSessionKey: localStorage.getItem("diary.supabase.session") !== null,
+      sessionStorageKeys: Object.keys(sessionStorage).sort(),
+    }));
     log("runtime config: ok");
+
+    let dates = await listDates(page);
+    assertPublicDates(dates);
+    let baselineCount = dates.length;
+    assert(
+      currentStatus.signedIn === false,
+      `default status should be signed out (${JSON.stringify({ currentStatus, storageState })})`,
+    );
+    assert(currentStatus.count === baselineCount, `expected public status count ${baselineCount}, got ${currentStatus.count}`);
+    const publicEntry = await getEntry(page, "2026-07-10");
+    assert(publicEntry.found === true, "public diary entry was not readable before sign in");
+    log(`public read before sign in: ok, count=${baselineCount}`);
 
     const authHiddenDefault = await page.evaluate(() => {
       const modal = document.querySelector("#authModal");
@@ -393,28 +413,30 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     await page.evaluate(() => window.diarySupabaseAdmin.closeAuth());
     log("session reload persistence: ok");
 
-    let dates = await listDates(page);
-    assertDates(dates, EXPECTED_COUNT);
-    log(`pre-test entries: count=${dates.length}, first=${EXPECTED_FIRST_DATE}, last=${EXPECTED_LAST_DATE}`);
+    dates = await listDates(page);
+    assertPublicDates(dates);
+    baselineCount = dates.length;
+    log(`pre-test entries: count=${baselineCount}`);
 
     await deleteEntry(page, TEST_DATE).catch(() => undefined);
     dates = await listDates(page);
     if (dates.includes(TEST_DATE)) {
       throw new Error("test date cleanup before writer test failed");
     }
+    baselineCount = dates.length;
 
     await openWriterAndSave(page, "one");
     cleanupNeeded = true;
     let entry = await getEntry(page, TEST_DATE);
     assert(entry.found === true, "writer save did not create test entry");
     dates = await listDates(page);
-    assert(dates.length === EXPECTED_COUNT + 1, `expected ${EXPECTED_COUNT + 1} dates after create, got ${dates.length}`);
+    assert(dates.length === baselineCount + 1, `expected ${baselineCount + 1} dates after create, got ${dates.length}`);
     log(`writer save: ok, count=${dates.length}`);
 
     await openWriterAndSave(page, "two");
     dates = await listDates(page);
     const testDateCount = dates.filter((date) => date === TEST_DATE).length;
-    assert(dates.length === EXPECTED_COUNT + 1, `same-date save changed count to ${dates.length}`);
+    assert(dates.length === baselineCount + 1, `same-date save changed count to ${dates.length}`);
     assert(testDateCount === 1, `duplicate ${TEST_DATE} dates found`);
     log(`same-date upsert: ok, count=${dates.length}`);
 
@@ -424,7 +446,7 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     entry = await getEntry(page, TEST_DATE);
     assert(entry.found === false, "test entry still exists after delete");
     dates = await listDates(page);
-    assert(dates.length === EXPECTED_COUNT, `expected final count ${EXPECTED_COUNT}, got ${dates.length}`);
+    assert(dates.length === baselineCount, `expected final count ${baselineCount}, got ${dates.length}`);
     log(`cleanup delete: ok, final count=${dates.length}`);
 
     await page.evaluate(() => window.diarySupabaseAdmin.signOut());
@@ -433,7 +455,9 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     currentStatus = await status(page);
     assert(currentStatus.signedIn === false, "signed-out status was not false");
     await page.waitForFunction(() => document.querySelectorAll("#grid .day").length > 0, null, { timeout: 5000 });
-    log("signed-out fallback: ok");
+    dates = await listDates(page);
+    assertPublicDates(dates);
+    log("signed-out public read: ok");
   } finally {
     if (cleanupNeeded) {
       await deleteEntry(page, TEST_DATE).catch(() => undefined);

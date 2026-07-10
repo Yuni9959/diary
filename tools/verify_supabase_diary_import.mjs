@@ -85,13 +85,17 @@ function decodeJwtPayload(token) {
   return JSON.parse(Buffer.from(padded, "base64").toString("utf8"));
 }
 
-function restHeaders(key, token) {
-  return {
+function restHeaders(key, token = null, extra = {}) {
+  const headers = {
     apikey: key,
-    Authorization: `Bearer ${token}`,
     "Accept-Profile": "diary",
     "Content-Profile": "diary",
+    ...extra,
   };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
 }
 
 async function signIn(env) {
@@ -122,17 +126,7 @@ async function signIn(env) {
   return auth.access_token;
 }
 
-async function main() {
-  if (!existsSync(ENV_PATH)) {
-    throw new Error(".env.local was not found.");
-  }
-
-  const env = parseEnv(await readFile(ENV_PATH, "utf8"));
-  requireEnv(env);
-
-  const token = await signIn(env);
-  console.log("sign in: ok");
-
+async function queryDates(env, token = null) {
   const baseUrl = normalizeUrl(env.SUPABASE_URL);
   const response = await fetch(
     `${baseUrl}/rest/v1/entries?select=entry_date&order=entry_date.asc`,
@@ -141,12 +135,69 @@ async function main() {
     },
   );
   const rows = await assertOk(response, "query diary entries");
-  const dates = rows.map((row) => row.entry_date);
+  return rows.map((row) => row.entry_date);
+}
 
-  console.log(`visible count: ${dates.length}`);
-  console.log(`first date: ${dates[0] || "none"}`);
-  console.log(`last date: ${dates[dates.length - 1] || "none"}`);
-  console.log(`sample dates: ${dates.slice(0, 5).join(", ")}`);
+async function assertAnonymousWriteDenied(env) {
+  const baseUrl = normalizeUrl(env.SUPABASE_URL);
+  const response = await fetch(`${baseUrl}/rest/v1/entries?select=id`, {
+    method: "POST",
+    headers: restHeaders(env.SUPABASE_PUBLISHABLE_KEY, null, {
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      entry_date: "2099-12-31",
+      title: "Anonymous write probe",
+      body: "Anonymous write probe.",
+      body_format: "plain",
+      metadata: {
+        temporary: true,
+        source: "tools/verify_supabase_diary_import.mjs",
+      },
+    }),
+  });
+
+  if (response.ok) {
+    throw new Error("anonymous write unexpectedly succeeded.");
+  }
+
+  if (![401, 403].includes(response.status)) {
+    const body = await readJson(response);
+    const message = body?.message || body?.error || response.statusText;
+    throw new Error(`anonymous write failed with unexpected status ${response.status}: ${message}`);
+  }
+}
+
+function printDateSummary(label, dates) {
+  console.log(`${label} visible count: ${dates.length}`);
+  console.log(`${label} first date: ${dates[0] || "none"}`);
+  console.log(`${label} last date: ${dates[dates.length - 1] || "none"}`);
+}
+
+async function main() {
+  if (!existsSync(ENV_PATH)) {
+    throw new Error(".env.local was not found.");
+  }
+
+  const env = parseEnv(await readFile(ENV_PATH, "utf8"));
+  requireEnv(env);
+
+  const publicDates = await queryDates(env);
+  console.log("anonymous read: ok");
+  printDateSummary("anonymous", publicDates);
+  await assertAnonymousWriteDenied(env);
+  console.log("anonymous write denied: ok");
+
+  const token = await signIn(env);
+  console.log("sign in: ok");
+  const signedInDates = await queryDates(env, token);
+
+  if (signedInDates.join("|") !== publicDates.join("|")) {
+    throw new Error("signed-in read does not match anonymous public read.");
+  }
+
+  console.log(`sample dates: ${publicDates.slice(0, 5).join(", ")}`);
   console.log("verification: ok");
 }
 

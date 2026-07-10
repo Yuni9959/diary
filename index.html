@@ -735,14 +735,11 @@ function installDiarySupabaseAdmin(){
         return {configured:false, signedIn:false};
       }
       const signedIn = hasSupabaseSession();
-      if(!signedIn){
-        return {configured:true, signedIn:false};
-      }
       const entries = await service.listEntries();
       const dates = entries.map(entry=>entry.date).sort();
       return {
         configured:true,
-        signedIn:true,
+        signedIn,
         count:dates.length,
         firstDate:dates[0] || null,
         lastDate:dates[dates.length - 1] || null,
@@ -772,13 +769,13 @@ function installDiarySupabaseAdmin(){
     },
     async listEntries(){
       const service = await diarySupabaseReady;
-      if(!service || !hasSupabaseSession()) return [];
+      if(!service) return [];
       const entries = await service.listEntries();
       return entries.map(entry=>entry.date).sort();
     },
     async getEntryByDate(date){
       const service = await diarySupabaseReady;
-      if(!service || !hasSupabaseSession()) return {found:false};
+      if(!service) return {found:false};
       return sanitizeSupabaseEntry(await service.getEntryByDate(date));
     },
     async deleteEntryByDate(date){
@@ -963,7 +960,7 @@ async function fetchEntry(key, indexItem){
   if(ENTRY_CACHE[key]) return ENTRY_CACHE[key];
   if(indexItem.entryUrl && indexItem.entryUrl.startsWith('supabase:')){
     const service = await diarySupabaseReady;
-    if(!service || !hasSupabaseSession()) throw new Error('Supabase session unavailable');
+    if(!service) throw new Error('Supabase service unavailable');
     const entry = await service.getEntryByDate(key);
     if(!entry) throw new Error('Supabase entry missing');
     ENTRY_CACHE[key] = entry;
@@ -1394,7 +1391,7 @@ function scheduleWriterAutoSave(){
 /* ---------- 데이터 로드 ---------- */
 async function loadData(){
   const service = await diarySupabaseReady;
-  if(service && hasSupabaseSession()){
+  if(service){
     try{
       DIARY_INDEX = await service.listEntryIndex();
       renderCalendar();
