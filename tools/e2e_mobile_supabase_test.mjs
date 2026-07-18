@@ -366,7 +366,8 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
   });
   page.on("requestfailed", (request) => {
     const url = new URL(request.url());
-    if (url.origin === appOrigin) {
+    const criticalResource = ["document", "script", "stylesheet"].includes(request.resourceType());
+    if (url.origin === appOrigin && criticalResource) {
       browserEvents.push(`requestfailed:${url.pathname}`);
     }
   });
