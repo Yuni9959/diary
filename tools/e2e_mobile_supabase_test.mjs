@@ -348,6 +348,7 @@ async function addSignedOutEntryComment(page) {
 }
 
 async function runBrowserFlow({ playwright, baseUrl, env }) {
+  const appOrigin = new URL(baseUrl).origin;
   const browser = await playwright.chromium.launch({ headless: true });
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -365,7 +366,9 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
   });
   page.on("requestfailed", (request) => {
     const url = new URL(request.url());
-    browserEvents.push(`requestfailed:${url.origin}${url.pathname}`);
+    if (url.origin === appOrigin) {
+      browserEvents.push(`requestfailed:${url.pathname}`);
+    }
   });
   let cleanupNeeded = false;
 
@@ -474,6 +477,15 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     assert(currentStatus.signedIn === false, "writer test did not start signed out");
     log("signed out before writer test: ok");
 
+    const queuedDrafts = await page.evaluate((date) => {
+      window.queueWriterDraft({ date, title: "old", body: "old queued body" }, "test-old");
+      window.queueWriterDraft({ date, title: "latest", body: "latest queued body" }, "test-latest");
+      return window.readWriterOutbox().filter((item) => item?.draft?.date === date);
+    }, TEST_DATE);
+    assert(queuedDrafts.length === 1, "same-date outbox drafts were not deduplicated");
+    assert(queuedDrafts[0].draft.body === "latest queued body", "outbox did not retain the latest same-date draft");
+    log("same-date outbox deduplication: ok");
+
     await openWriterAndSave(page, "one");
     cleanupNeeded = true;
     currentStatus = await status(page);
@@ -482,6 +494,10 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     assert(entry.found === true, "writer save did not create test entry");
     dates = await listDates(page);
     assert(dates.length === baselineCount + 1, `expected ${baselineCount + 1} dates after create, got ${dates.length}`);
+    const queuedAfterSave = await page.evaluate((date) => {
+      return window.readWriterOutbox().filter((item) => item?.draft?.date === date).length;
+    }, TEST_DATE);
+    assert(queuedAfterSave === 0, "successful save left a stale same-date outbox draft");
     log(`signed-out writer save: ok, count=${dates.length}`);
 
     await openWriterAndSave(page, "two");
@@ -520,6 +536,7 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     await page.waitForFunction(() => document.querySelectorAll("#grid .day").length > 0, null, { timeout: 5000 });
     dates = await listDates(page);
     assertPublicDates(dates);
+    assert(browserEvents.length === 0, `browser errors were recorded: ${browserEvents.join(", ")}`);
     log("signed-out public read: ok");
   } finally {
     if (cleanupNeeded) {

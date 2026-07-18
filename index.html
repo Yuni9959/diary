@@ -656,6 +656,7 @@ let diarySupabase = null;
 let diarySupabaseReady = Promise.resolve(null);
 let lastNativeFullscreenExitAt = 0;
 let activeCommentEntryId = null;
+let activeEntryComments = [];
 let commentViewVersion = 0;
 const WRITER_DRAFT_KEY = 'diaryWriterDraft:v1';
 const WRITER_SETTINGS_KEY = 'diaryWriterSettings:v1';
@@ -797,8 +798,7 @@ function installDiarySupabaseAdmin(){
         return {configured:false, signedIn:false};
       }
       const signedIn = hasSupabaseSession();
-      const entries = await service.listEntries();
-      const dates = entries.map(entry=>entry.date).sort();
+      const dates = await service.listEntryDates();
       return {
         configured:true,
         signedIn,
@@ -832,8 +832,7 @@ function installDiarySupabaseAdmin(){
     async listEntries(){
       const service = await diarySupabaseReady;
       if(!service) return [];
-      const entries = await service.listEntries();
-      return entries.map(entry=>entry.date).sort();
+      return service.listEntryDates();
     },
     async getEntryByDate(date){
       const service = await diarySupabaseReady;
@@ -1007,6 +1006,7 @@ function setEntryCommentFormDisabled(disabled){
 function resetEntryComments(){
   commentViewVersion++;
   activeCommentEntryId = null;
+  activeEntryComments = [];
   $('#entryComments').hidden = true;
   $('#entryCommentsList').innerHTML = '';
   $('#entryCommentForm').reset();
@@ -1059,6 +1059,7 @@ async function loadEntryComments(entryId, viewVersion){
   const section = $('#entryComments');
   section.hidden = false;
   activeCommentEntryId = entryId;
+  activeEntryComments = [];
   setEntryCommentFormDisabled(true);
   setEntryCommentStatus('');
   renderEntryCommentNotice('한마디를 불러오고 있어요...');
@@ -1067,12 +1068,14 @@ async function loadEntryComments(entryId, viewVersion){
     if(!service) throw new Error('Supabase service unavailable');
     const comments = await service.listEntryComments(entryId);
     if(viewVersion !== commentViewVersion || activeCommentEntryId !== entryId) return;
-    renderEntryComments(comments);
+    activeEntryComments = comments;
+    renderEntryComments(activeEntryComments);
     setEntryCommentFormDisabled(false);
   }catch(e){
     if(viewVersion !== commentViewVersion) return;
     console.warn('일기 댓글을 불러오지 못했습니다.', e);
     activeCommentEntryId = null;
+    activeEntryComments = [];
     renderEntryCommentNotice('한마디를 불러오지 못했어요.');
     setEntryCommentStatus('잠시 후 다시 열어 주세요.');
     setEntryCommentFormDisabled(true);
@@ -1098,11 +1101,11 @@ async function submitEntryComment(event){
   try{
     const service = await diarySupabaseReady;
     if(!service) throw new Error('Supabase service unavailable');
-    await service.createEntryComment(entryId, body);
-    const comments = await service.listEntryComments(entryId);
+    const comment = await service.createEntryComment(entryId, body);
     if(viewVersion !== commentViewVersion || activeCommentEntryId !== entryId) return;
     bodyInput.value = '';
-    renderEntryComments(comments);
+    activeEntryComments = [...activeEntryComments, comment];
+    renderEntryComments(activeEntryComments);
     setEntryCommentStatus('한마디를 남겼어요.');
   }catch(e){
     if(viewVersion !== commentViewVersion) return;
@@ -1316,33 +1319,50 @@ function readJsonStorage(key, fallback){
   }
 }
 function writeJsonStorage(key, value){
-  localStorage.setItem(key, JSON.stringify(value));
+  try{
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  }catch(_e){
+    return false;
+  }
+}
+function removeLocalStorageItem(key){
+  try{
+    localStorage.removeItem(key);
+    return true;
+  }catch(_e){
+    return false;
+  }
 }
 function saveWriterSettings(){
   const els = writerEls();
   writeJsonStorage(WRITER_SETTINGS_KEY, {
     apiUrl: els.apiUrl.value.trim()
   });
-  sessionStorage.setItem(WRITER_TOKEN_SESSION_KEY, els.token.value);
+  try{
+    sessionStorage.setItem(WRITER_TOKEN_SESSION_KEY, els.token.value);
+  }catch(_e){
+    // Keep the current in-memory form value when session storage is unavailable.
+  }
 }
 function restoreWriterSettings(){
   const els = writerEls();
   const settings = readJsonStorage(WRITER_SETTINGS_KEY, {});
   els.apiUrl.value = settings.apiUrl || '';
-  els.token.value = sessionStorage.getItem(WRITER_TOKEN_SESSION_KEY) || '';
+  try{
+    els.token.value = sessionStorage.getItem(WRITER_TOKEN_SESSION_KEY) || '';
+  }catch(_e){
+    els.token.value = '';
+  }
 }
 function saveWriterDraft(reason='임시 저장했어요.'){
   const draft = getWriterDraft();
-  localStorage.setItem(WRITER_DRAFT_KEY, JSON.stringify(draft));
+  writeJsonStorage(WRITER_DRAFT_KEY, draft);
   saveWriterSettings();
   setWriterStatus(`${reason} (${new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'})})`);
 }
 function readWriterDraft(){
-  try{
-    return JSON.parse(localStorage.getItem(WRITER_DRAFT_KEY) || 'null');
-  }catch(_e){
-    return null;
-  }
+  return readJsonStorage(WRITER_DRAFT_KEY, null);
 }
 function restoreWriterDraft(showMessage=true){
   const els = writerEls();
@@ -1359,7 +1379,7 @@ function restoreWriterDraft(showMessage=true){
   return true;
 }
 function clearWriterDraft(){
-  localStorage.removeItem(WRITER_DRAFT_KEY);
+  removeLocalStorageItem(WRITER_DRAFT_KEY);
   const els = writerEls();
   els.date.value = todayKey();
   els.title.value = '';
@@ -1368,7 +1388,17 @@ function clearWriterDraft(){
 }
 function readWriterOutbox(){
   const items = readJsonStorage(WRITER_OUTBOX_KEY, []);
-  return Array.isArray(items) ? items : [];
+  if(!Array.isArray(items)) return [];
+  const seenDates = new Set();
+  const latestItems = [];
+  for(let index=items.length-1; index>=0; index--){
+    const item = items[index];
+    const date = item?.draft?.date;
+    if(date && seenDates.has(date)) continue;
+    if(date) seenDates.add(date);
+    latestItems.push(item);
+  }
+  return latestItems.reverse();
 }
 function saveWriterOutbox(items){
   writeJsonStorage(WRITER_OUTBOX_KEY, items);
@@ -1381,7 +1411,7 @@ function updateWriterOutbox(){
   el.textContent = count ? `전송 대기 글 ${count}개 - 네트워크가 안정적일 때 다시 보내세요.` : '전송 대기 글 0개';
 }
 function queueWriterDraft(draft, reason){
-  const items = readWriterOutbox();
+  const items = readWriterOutbox().filter(item=>item?.draft?.date !== draft.date);
   items.push({
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     draft,
@@ -1389,6 +1419,11 @@ function queueWriterDraft(draft, reason){
     queuedAt: new Date().toISOString()
   });
   saveWriterOutbox(items);
+}
+function removeQueuedWriterDraftsForDate(date){
+  const items = readWriterOutbox();
+  const remaining = items.filter(item=>item?.draft?.date !== date);
+  if(remaining.length !== items.length) saveWriterOutbox(remaining);
 }
 function archiveUploadedDraft(draft, response){
   const items = readJsonStorage(WRITER_ARCHIVE_KEY, []);
@@ -1490,8 +1525,11 @@ async function uploadWriterDraft(){
   setWriterStatus('업로드하고 있어요...');
   try{
     const result = await postDiaryDraft(draft);
+    clearTimeout(writerAutoSaveTimer);
+    writerAutoSaveTimer = null;
+    removeQueuedWriterDraftsForDate(draft.date);
     archiveUploadedDraft(draft, result);
-    localStorage.removeItem(WRITER_DRAFT_KEY);
+    removeLocalStorageItem(WRITER_DRAFT_KEY);
     const els = writerEls();
     els.title.value = '';
     els.body.value = '';

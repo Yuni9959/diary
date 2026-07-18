@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'diary-pwa-v3';
+const CACHE_VERSION = 'diary-pwa-v4';
 const APP_CACHE = `${CACHE_VERSION}-app`;
 const DATA_CACHE = `${CACHE_VERSION}-data`;
 
@@ -7,6 +7,9 @@ const APP_SHELL = [
   './index.html',
   './manifest.webmanifest',
   './sw.js',
+  './lib/supabase-runtime-config.js',
+  './lib/supabase-client.js',
+  './lib/diary-service.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-192.png',
@@ -64,16 +67,29 @@ function isDataRequest(pathname) {
   return pathname.includes('/data/') || pathname.startsWith('/data/') || pathname.startsWith('/Diary_formyWife/data/');
 }
 
-function isRuntimeConfigRequest(pathname) {
-  return pathname.endsWith('/lib/supabase-runtime-config.js') || pathname.endsWith('/supabase-runtime-config.js');
+function isRuntimeCodeRequest(pathname) {
+  return pathname.includes('/lib/') && pathname.endsWith('.js');
+}
+
+async function storeInCache(cache, request, response) {
+  try {
+    await cache.put(request, response.clone());
+  } catch (_error) {
+    // A full or unavailable cache must not discard a valid network response.
+  }
 }
 
 async function networkFirst(request, cacheName, fallbackUrl) {
   const cache = await caches.open(cacheName);
   try {
     const response = await fetch(request);
-    if (response && response.ok) await cache.put(request, response.clone());
-    return response;
+    if (response && response.ok) {
+      await storeInCache(cache, request, response);
+      return response;
+    }
+
+    const cached = await cache.match(request);
+    return cached || response;
   } catch (_error) {
     const cached = await cache.match(request);
     if (cached) return cached;
@@ -91,7 +107,7 @@ async function cacheFirst(request) {
   const response = await fetch(request);
   if (response && response.ok) {
     const cache = await caches.open(APP_CACHE);
-    await cache.put(request, response.clone());
+    await storeInCache(cache, request, response);
   }
   return response;
 }
@@ -114,7 +130,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (isRuntimeConfigRequest(url.pathname)) {
+  if (isRuntimeCodeRequest(url.pathname)) {
     event.respondWith(networkFirst(request, APP_CACHE));
     return;
   }
