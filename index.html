@@ -340,6 +340,55 @@
   }
   .sheet__body p:last-child{ margin-bottom:0; }
 
+  .entry-comments{
+    margin-top:30px; padding-top:22px;
+    border-top:1px solid rgba(196,154,94,.28);
+  }
+  .entry-comments[hidden]{ display:none; }
+  .entry-comments__title{
+    margin:0 0 14px; color:var(--ink);
+    font-family:var(--serif-display); font-size:calc(1rem * var(--reading-scale));
+    font-weight:800; line-height:1.45;
+  }
+  .entry-comments__list{ display:grid; gap:14px; margin-bottom:16px; }
+  .entry-comment{ margin:0; }
+  .entry-comment__meta{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    color:var(--ink-soft); font-size:.76rem; line-height:1.4;
+  }
+  .entry-comment__author{ font-weight:700; }
+  .entry-comment__body{
+    margin:4px 0 0; color:#564C42;
+    font-size:calc(.96rem * var(--reading-scale)); line-height:1.75;
+    white-space:pre-wrap; overflow-wrap:anywhere;
+  }
+  .entry-comments__empty{
+    margin:0; color:var(--ink-soft); font-size:.86rem; line-height:1.6;
+  }
+  .entry-comments__form{ display:grid; gap:8px; }
+  .entry-comments__form textarea{
+    width:100%; min-height:84px; resize:vertical;
+    border:1px solid var(--line); border-radius:14px;
+    background:rgba(255,253,248,.76); color:var(--ink);
+    font-family:var(--serif); font-size:16px; line-height:1.65;
+    padding:11px 12px; outline:none;
+  }
+  .entry-comments__form textarea:focus{
+    border-color:var(--gold); box-shadow:0 0 0 3px rgba(196,154,94,.14);
+  }
+  .entry-comments__actions{ display:flex; align-items:center; justify-content:flex-end; gap:10px; }
+  .entry-comments__status{
+    flex:1; min-height:1.4em; color:var(--ink-soft); font-size:.8rem; line-height:1.5;
+  }
+  .entry-comments__submit{
+    min-width:76px; min-height:40px; padding:0 14px;
+    border:1px solid rgba(196,154,94,.58); border-radius:14px;
+    background:rgba(196,154,94,.14); color:var(--ink); cursor:pointer;
+    font-family:var(--serif); font-weight:700;
+  }
+  .entry-comments__form textarea:disabled,
+  .entry-comments__submit:disabled{ opacity:.55; cursor:default; }
+
   .writer-sheet{ width:min(100%,620px); }
   .writer-form{ display:grid; gap:14px; }
   .writer-field{ display:grid; gap:7px; }
@@ -469,6 +518,17 @@
       <h2 class="sheet__title" id="sheetTitle"></h2>
       <div class="sheet__photos" id="sheetPhotos"></div>
       <div class="sheet__body" id="sheetBody"></div>
+      <section class="entry-comments" id="entryComments" aria-labelledby="entryCommentsTitle" hidden>
+        <h3 class="entry-comments__title" id="entryCommentsTitle">여보의 한마디</h3>
+        <div class="entry-comments__list" id="entryCommentsList" aria-live="polite"></div>
+        <form class="entry-comments__form" id="entryCommentForm">
+          <textarea id="entryCommentBody" maxlength="500" aria-label="짧은 답장" placeholder="짧은 마음을 남겨 주세요."></textarea>
+          <div class="entry-comments__actions">
+            <div class="entry-comments__status" id="entryCommentStatus" role="status" aria-live="polite"></div>
+            <button class="entry-comments__submit" id="entryCommentSubmit" type="submit">남기기</button>
+          </div>
+        </form>
+      </section>
     </div>
   </div>
 
@@ -595,6 +655,8 @@ const TEXT_CACHE = {};
 let diarySupabase = null;
 let diarySupabaseReady = Promise.resolve(null);
 let lastNativeFullscreenExitAt = 0;
+let activeCommentEntryId = null;
+let commentViewVersion = 0;
 const WRITER_DRAFT_KEY = 'diaryWriterDraft:v1';
 const WRITER_SETTINGS_KEY = 'diaryWriterSettings:v1';
 const WRITER_TOKEN_SESSION_KEY = 'diaryWriterToken:session:v1';
@@ -935,6 +997,123 @@ function showBodyLines(lines){
     body.appendChild(p);
   });
 }
+function setEntryCommentStatus(message){
+  $('#entryCommentStatus').textContent = message || '';
+}
+function setEntryCommentFormDisabled(disabled){
+  $('#entryCommentBody').disabled = disabled;
+  $('#entryCommentSubmit').disabled = disabled;
+}
+function resetEntryComments(){
+  commentViewVersion++;
+  activeCommentEntryId = null;
+  $('#entryComments').hidden = true;
+  $('#entryCommentsList').innerHTML = '';
+  $('#entryCommentForm').reset();
+  setEntryCommentStatus('');
+  setEntryCommentFormDisabled(true);
+}
+function renderEntryCommentNotice(message){
+  const list = $('#entryCommentsList');
+  list.innerHTML = '';
+  const notice = document.createElement('p');
+  notice.className = 'entry-comments__empty';
+  notice.textContent = message;
+  list.appendChild(notice);
+}
+function formatEntryCommentTime(value){
+  const date = new Date(value);
+  if(Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone:'Asia/Seoul', month:'long', day:'numeric', hour:'2-digit', minute:'2-digit'
+  }).format(date);
+}
+function renderEntryComments(comments){
+  const list = $('#entryCommentsList');
+  list.innerHTML = '';
+  if(!comments.length){
+    renderEntryCommentNotice('아직 남겨진 한마디가 없어요.');
+    return;
+  }
+  comments.forEach(comment=>{
+    const item = document.createElement('article');
+    item.className = 'entry-comment';
+    const meta = document.createElement('div');
+    meta.className = 'entry-comment__meta';
+    const author = document.createElement('span');
+    author.className = 'entry-comment__author';
+    author.textContent = '여보';
+    const time = document.createElement('time');
+    time.dateTime = comment.createdAt || '';
+    time.textContent = formatEntryCommentTime(comment.createdAt);
+    meta.append(author, time);
+    const body = document.createElement('p');
+    body.className = 'entry-comment__body';
+    body.textContent = comment.body;
+    item.append(meta, body);
+    list.appendChild(item);
+  });
+}
+async function loadEntryComments(entryId, viewVersion){
+  if(viewVersion !== commentViewVersion) return;
+  const section = $('#entryComments');
+  section.hidden = false;
+  activeCommentEntryId = entryId;
+  setEntryCommentFormDisabled(true);
+  setEntryCommentStatus('');
+  renderEntryCommentNotice('한마디를 불러오고 있어요...');
+  try{
+    const service = await diarySupabaseReady;
+    if(!service) throw new Error('Supabase service unavailable');
+    const comments = await service.listEntryComments(entryId);
+    if(viewVersion !== commentViewVersion || activeCommentEntryId !== entryId) return;
+    renderEntryComments(comments);
+    setEntryCommentFormDisabled(false);
+  }catch(e){
+    if(viewVersion !== commentViewVersion) return;
+    console.warn('일기 댓글을 불러오지 못했습니다.', e);
+    activeCommentEntryId = null;
+    renderEntryCommentNotice('한마디를 불러오지 못했어요.');
+    setEntryCommentStatus('잠시 후 다시 열어 주세요.');
+    setEntryCommentFormDisabled(true);
+  }
+}
+async function submitEntryComment(event){
+  event.preventDefault();
+  const entryId = activeCommentEntryId;
+  const bodyInput = $('#entryCommentBody');
+  const body = bodyInput.value.trim();
+  if(!entryId){
+    setEntryCommentStatus('일기를 다시 열어 주세요.');
+    return;
+  }
+  if(!body){
+    setEntryCommentStatus('남길 한마디를 적어 주세요.');
+    bodyInput.focus();
+    return;
+  }
+  const viewVersion = commentViewVersion;
+  setEntryCommentFormDisabled(true);
+  setEntryCommentStatus('한마디를 남기고 있어요...');
+  try{
+    const service = await diarySupabaseReady;
+    if(!service) throw new Error('Supabase service unavailable');
+    await service.createEntryComment(entryId, body);
+    const comments = await service.listEntryComments(entryId);
+    if(viewVersion !== commentViewVersion || activeCommentEntryId !== entryId) return;
+    bodyInput.value = '';
+    renderEntryComments(comments);
+    setEntryCommentStatus('한마디를 남겼어요.');
+  }catch(e){
+    if(viewVersion !== commentViewVersion) return;
+    console.warn('일기 댓글을 저장하지 못했습니다.', e);
+    setEntryCommentStatus('저장하지 못했어요. 인터넷 연결을 확인해 주세요.');
+  }finally{
+    if(viewVersion === commentViewVersion && activeCommentEntryId === entryId){
+      setEntryCommentFormDisabled(false);
+    }
+  }
+}
 function renderPhotos(photos){
   const ph = $('#sheetPhotos'); ph.innerHTML='';
   (photos||[]).forEach(photo=>{
@@ -1047,6 +1226,8 @@ async function toggleReadingFullscreen(){
 async function openDiary(key){
   const indexItem = DIARY_INDEX[key]; if(!indexItem) return;
   await exitReadingFullscreen({skipNative:false});
+  resetEntryComments();
+  const entryCommentViewVersion = commentViewVersion;
   const [y,m,day] = key.split('-').map(Number);
   const dow = DOW_KO[new Date(y,m-1,day).getDay()];
   $('#sheetDate').textContent = `${y}년 ${m}월 ${day}일 ${dow}요일`;
@@ -1070,6 +1251,9 @@ async function openDiary(key){
     }else{
       showBodyLines(entry.body || '');
     }
+    if(entry.id){
+      await loadEntryComments(entry.id, entryCommentViewVersion);
+    }
   }catch(e){
     console.warn('일기 상세 데이터를 불러오지 못했습니다.', e);
     renderPhotos([]);
@@ -1081,6 +1265,7 @@ async function closeDiary(){
     await exitReadingFullscreen();
   }
   $('#modal').classList.remove('open');
+  resetEntryComments();
   document.body.style.overflow='';
   updateFullscreenButton();
 }
@@ -1436,6 +1621,7 @@ function init(){
   $('#authForm').addEventListener('submit', submitAuthForm);
   $('#authCloseBtn').addEventListener('click', closeAuth);
   $('#authSignOutBtn').addEventListener('click', signOutFromAuth);
+  $('#entryCommentForm').addEventListener('submit', submitEntryComment);
   ['input','change'].forEach(type=>{
     $('#writerDate').addEventListener(type, scheduleWriterAutoSave);
     $('#writerTitleInput').addEventListener(type, scheduleWriterAutoSave);

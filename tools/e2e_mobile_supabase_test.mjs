@@ -9,6 +9,7 @@ const ROOT = resolve(".");
 const ENV_PATH = ".env.local";
 const DEFAULT_PORT = 4173;
 const TEST_DATE = "2099-01-01";
+const TEST_COMMENT = "E2E wife comment";
 const REQUIRED_PUBLIC_DATES = ["2026-02-27", "2026-07-10", "2026-07-18"];
 
 const MIME_TYPES = {
@@ -305,6 +306,47 @@ async function openWriterAndSave(page, bodySuffix) {
   });
 }
 
+async function addSignedOutEntryComment(page) {
+  await page.evaluate((date) => window.openDiary(date), TEST_DATE);
+  await page.locator("#modal.open").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#entryComments:not([hidden])").waitFor({ state: "visible", timeout: 5000 });
+  await page.waitForFunction(() => !document.querySelector("#entryCommentSubmit").disabled, null, {
+    timeout: 5000,
+  });
+
+  const sectionFollowsBody = await page.evaluate(() => {
+    const body = document.querySelector("#sheetBody");
+    const comments = document.querySelector("#entryComments");
+    return Boolean(body.compareDocumentPosition(comments) & Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+  assert(sectionFollowsBody, "comment section is not below the diary body");
+  assert(
+    (await page.locator("#entryCommentsList").textContent()).includes("아직 남겨진 한마디가 없어요."),
+    "new test entry did not start with an empty comment list",
+  );
+
+  await page.locator("#entryCommentBody").fill(TEST_COMMENT);
+  await page.locator("#entryCommentSubmit").click();
+  await page.waitForFunction(
+    (comment) => {
+      const bodies = [...document.querySelectorAll(".entry-comment__body")];
+      return bodies.length === 1 && bodies[0].textContent === comment;
+    },
+    TEST_COMMENT,
+    { timeout: 15000 },
+  );
+  assert((await page.locator("#entryCommentBody").inputValue()) === "", "comment textarea was not cleared");
+  assert(
+    (await page.locator("#entryCommentStatus").textContent()).includes("한마디를 남겼어요."),
+    "comment success status was not shown",
+  );
+
+  await page.locator("#closeBtn").click();
+  await page.waitForFunction(() => !document.querySelector("#modal").classList.contains("open"), null, {
+    timeout: 5000,
+  });
+}
+
 async function runBrowserFlow({ playwright, baseUrl, env }) {
   const browser = await playwright.chromium.launch({ headless: true });
   const context = await browser.newContext({
@@ -450,6 +492,11 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     assert(dates.length === baselineCount + 1, `same-date save changed count to ${dates.length}`);
     assert(testDateCount === 1, `duplicate ${TEST_DATE} dates found`);
     log(`signed-out same-date upsert: ok, count=${dates.length}`);
+
+    await addSignedOutEntryComment(page);
+    currentStatus = await status(page);
+    assert(currentStatus.signedIn === false, "comment save established an auth session");
+    log("signed-out entry comment: ok");
 
     await page.evaluate(
       ({ email, password }) => window.diarySupabaseAdmin.signIn(email, password),
