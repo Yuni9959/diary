@@ -271,7 +271,7 @@ async function buildRecords(userId) {
 async function upsertRecords(env, token, records) {
   const baseUrl = normalizeUrl(env.SUPABASE_URL);
   const key = env.SUPABASE_PUBLISHABLE_KEY;
-  const response = await fetch(`${baseUrl}/rest/v1/entries?on_conflict=owner_id,entry_date`, {
+  const response = await fetch(`${baseUrl}/rest/v1/entries?on_conflict=entry_date`, {
     method: "POST",
     headers: restHeaders(key, token, {
       Prefer: "resolution=merge-duplicates,return=representation",

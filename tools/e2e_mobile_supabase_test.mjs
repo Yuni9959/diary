@@ -9,7 +9,7 @@ const ROOT = resolve(".");
 const ENV_PATH = ".env.local";
 const DEFAULT_PORT = 4173;
 const TEST_DATE = "2099-01-01";
-const REQUIRED_PUBLIC_DATES = ["2026-02-27", "2026-07-10"];
+const REQUIRED_PUBLIC_DATES = ["2026-02-27", "2026-07-10", "2026-07-18"];
 
 const MIME_TYPES = {
   ".html": "text/html;charset=utf-8",
@@ -425,20 +425,36 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     }
     baselineCount = dates.length;
 
+    await page.evaluate(() => window.diarySupabaseAdmin.signOut());
+    await page.goto(baseUrl, { waitUntil: "domcontentloaded" });
+    await waitForAdmin(page);
+    currentStatus = await status(page);
+    assert(currentStatus.signedIn === false, "writer test did not start signed out");
+    log("signed out before writer test: ok");
+
     await openWriterAndSave(page, "one");
     cleanupNeeded = true;
+    currentStatus = await status(page);
+    assert(currentStatus.signedIn === false, "writer create established an auth session");
     let entry = await getEntry(page, TEST_DATE);
     assert(entry.found === true, "writer save did not create test entry");
     dates = await listDates(page);
     assert(dates.length === baselineCount + 1, `expected ${baselineCount + 1} dates after create, got ${dates.length}`);
-    log(`writer save: ok, count=${dates.length}`);
+    log(`signed-out writer save: ok, count=${dates.length}`);
 
     await openWriterAndSave(page, "two");
+    currentStatus = await status(page);
+    assert(currentStatus.signedIn === false, "writer update established an auth session");
     dates = await listDates(page);
     const testDateCount = dates.filter((date) => date === TEST_DATE).length;
     assert(dates.length === baselineCount + 1, `same-date save changed count to ${dates.length}`);
     assert(testDateCount === 1, `duplicate ${TEST_DATE} dates found`);
-    log(`same-date upsert: ok, count=${dates.length}`);
+    log(`signed-out same-date upsert: ok, count=${dates.length}`);
+
+    await page.evaluate(
+      ({ email, password }) => window.diarySupabaseAdmin.signIn(email, password),
+      { email: env.DIARY_TEST_EMAIL, password: env.DIARY_TEST_PASSWORD },
+    );
 
     const deleted = await deleteEntry(page, TEST_DATE);
     cleanupNeeded = false;
@@ -460,6 +476,10 @@ async function runBrowserFlow({ playwright, baseUrl, env }) {
     log("signed-out public read: ok");
   } finally {
     if (cleanupNeeded) {
+      await page.evaluate(
+        ({ email, password }) => window.diarySupabaseAdmin.signIn(email, password),
+        { email: env.DIARY_TEST_EMAIL, password: env.DIARY_TEST_PASSWORD },
+      ).catch(() => undefined);
       await deleteEntry(page, TEST_DATE).catch(() => undefined);
     }
     await browser.close();

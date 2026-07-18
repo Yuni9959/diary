@@ -138,34 +138,62 @@ async function queryDates(env, token = null) {
   return rows.map((row) => row.entry_date);
 }
 
-async function assertAnonymousWriteDenied(env) {
+async function assertAnonymousWriteAllowed(env, cleanupToken) {
   const baseUrl = normalizeUrl(env.SUPABASE_URL);
-  const response = await fetch(`${baseUrl}/rest/v1/entries?select=id`, {
-    method: "POST",
-    headers: restHeaders(env.SUPABASE_PUBLISHABLE_KEY, null, {
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-    }),
-    body: JSON.stringify({
-      entry_date: "2099-12-31",
-      title: "Anonymous write probe",
-      body: "Anonymous write probe.",
-      body_format: "plain",
-      metadata: {
-        temporary: true,
-        source: "tools/verify_supabase_diary_import.mjs",
-      },
-    }),
-  });
+  const key = env.SUPABASE_PUBLISHABLE_KEY;
+  const entryDate = "2099-12-31";
+  const endpoint = `${baseUrl}/rest/v1/entries?on_conflict=entry_date&select=id,entry_date,title`;
+  const cleanupEndpoint = `${baseUrl}/rest/v1/entries?entry_date=eq.${entryDate}`;
 
-  if (response.ok) {
-    throw new Error("anonymous write unexpectedly succeeded.");
-  }
+  await assertOk(
+    await fetch(cleanupEndpoint, {
+      method: "DELETE",
+      headers: restHeaders(key, cleanupToken, { Prefer: "return=minimal" }),
+    }),
+    "clean anonymous write probe before test",
+  );
 
-  if (![401, 403].includes(response.status)) {
-    const body = await readJson(response);
-    const message = body?.message || body?.error || response.statusText;
-    throw new Error(`anonymous write failed with unexpected status ${response.status}: ${message}`);
+  try {
+    for (const title of ["Anonymous write probe", "Anonymous write probe updated"]) {
+      const rows = await assertOk(
+        await fetch(endpoint, {
+          method: "POST",
+          headers: restHeaders(key, null, {
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=representation",
+          }),
+          body: JSON.stringify({
+            entry_date: entryDate,
+            title,
+            body: "Anonymous write probe.",
+            body_format: "plain",
+            metadata: {
+              temporary: true,
+              source: "tools/verify_supabase_diary_import.mjs",
+            },
+          }),
+        }),
+        `anonymous upsert (${title})`,
+      );
+      if (rows.length !== 1 || rows[0].entry_date !== entryDate) {
+        throw new Error(`anonymous upsert returned an unexpected result (${title}).`);
+      }
+    }
+
+    const rows = await assertOk(
+      await fetch(`${baseUrl}/rest/v1/entries?entry_date=eq.${entryDate}&select=entry_date,title`, {
+        headers: restHeaders(key),
+      }),
+      "query anonymous write probe",
+    );
+    if (rows.length !== 1 || rows[0].title !== "Anonymous write probe updated") {
+      throw new Error("anonymous same-date upsert did not update exactly one row.");
+    }
+  } finally {
+    await fetch(cleanupEndpoint, {
+      method: "DELETE",
+      headers: restHeaders(key, cleanupToken, { Prefer: "return=minimal" }),
+    }).catch(() => undefined);
   }
 }
 
@@ -186,8 +214,6 @@ async function main() {
   const publicDates = await queryDates(env);
   console.log("anonymous read: ok");
   printDateSummary("anonymous", publicDates);
-  await assertAnonymousWriteDenied(env);
-  console.log("anonymous write denied: ok");
 
   const token = await signIn(env);
   console.log("sign in: ok");
@@ -196,6 +222,9 @@ async function main() {
   if (signedInDates.join("|") !== publicDates.join("|")) {
     throw new Error("signed-in read does not match anonymous public read.");
   }
+
+  await assertAnonymousWriteAllowed(env, token);
+  console.log("anonymous create and same-date update: ok");
 
   console.log(`sample dates: ${publicDates.slice(0, 5).join(", ")}`);
   console.log("verification: ok");

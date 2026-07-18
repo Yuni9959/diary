@@ -1235,7 +1235,7 @@ function writerApiSettings(){
 }
 async function postDiaryDraft(draft){
   const service = await diarySupabaseReady;
-  if(service && hasSupabaseSession()){
+  if(service){
     const entry = await service.upsertEntryByDate({
       entry_date:draft.date,
       title:draft.title || draft.date,
