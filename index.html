@@ -1592,8 +1592,9 @@ function openWriter(){
   document.body.style.overflow='hidden';
   restoreWriterSettings();
   updateWriterOutbox();
-  if(!restoreWriterDraft(false)){
-    els.date.value = todayKey();
+  const restoredDraft = restoreWriterDraft(false);
+  els.date.value = todayKey();
+  if(!restoredDraft){
     setWriterStatus('새 글을 작성할 수 있어요. 입력 중 자동으로 임시 저장됩니다.');
   }else{
     setWriterStatus('작성 중이던 글을 불러왔어요.');
@@ -1660,6 +1661,10 @@ function init(){
   $('#authCloseBtn').addEventListener('click', closeAuth);
   $('#authSignOutBtn').addEventListener('click', signOutFromAuth);
   $('#entryCommentForm').addEventListener('submit', submitEntryComment);
+  $('#entryCommentSubmit').addEventListener('click', event=>{
+    event.preventDefault();
+    submitEntryComment(event);
+  });
   ['input','change'].forEach(type=>{
     $('#writerDate').addEventListener(type, scheduleWriterAutoSave);
     $('#writerTitleInput').addEventListener(type, scheduleWriterAutoSave);

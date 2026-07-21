@@ -287,7 +287,11 @@ async function waitForAsync(check, message, { timeout = 15000, interval = 250 } 
 async function openWriterAndSave(page, bodySuffix) {
   await page.locator("#openWriterBtn").click();
   await page.locator("#writerModal.open").waitFor({ state: "visible", timeout: 5000 });
+  const expectedToday = await page.evaluate(() => window.todayKey());
+  const initialDate = await page.locator("#writerDate").inputValue();
+  assert(initialDate === expectedToday, `writer default date was ${initialDate}, expected ${expectedToday}`);
   await page.locator("#writerDate").fill(TEST_DATE);
+  assert((await page.locator("#writerDate").inputValue()) === TEST_DATE, "writer date could not be changed");
   await page.locator("#writerTitleInput").fill("E2E test entry");
   await page.locator("#writerBody").fill(`E2E body ${bodySuffix}`);
   await page.locator("#uploadDraftBtn").click();
@@ -326,7 +330,7 @@ async function addSignedOutEntryComment(page) {
   );
 
   await page.locator("#entryCommentBody").fill(TEST_COMMENT);
-  await page.locator("#entryCommentSubmit").click();
+  await page.locator("#entryCommentSubmit").tap();
   await page.waitForFunction(
     (comment) => {
       const bodies = [...document.querySelectorAll(".entry-comment__body")];
