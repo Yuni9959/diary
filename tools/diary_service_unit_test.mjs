@@ -72,11 +72,8 @@ async function testServiceMethodsDoNotDependOnCallBinding() {
     if (url.includes("/auth/v1/token")) {
       return jsonResponse({ access_token: accessToken });
     }
-    if (method === "GET" && url.includes("entry_date=eq.2099-01-01")) {
+    if (method === "DELETE" && url.includes("entry_date=eq.2099-01-01")) {
       return jsonResponse([{ id: "entry-1" }]);
-    }
-    if (method === "DELETE" && url.includes("id=eq.entry-1")) {
-      return new Response(null, { status: 204 });
     }
     if (method === "POST" && url.includes("/rest/v1/entry_comments")) {
       const body = JSON.parse(options.body);
@@ -100,7 +97,8 @@ async function testServiceMethodsDoNotDependOnCallBinding() {
 
   const deleteEntryByDate = service.deleteEntryByDate;
   assert.equal(await deleteEntryByDate("2099-01-01"), true);
-  assert(requests.some((request) => request.method === "DELETE"));
+  assert.equal(requests.filter((request) => request.method === "DELETE").length, 1);
+  assert(!requests.some((request) => request.method === "GET"));
 
   await assert.rejects(() => service.createEntryComment("entry-1", "   "), /body is required/);
   const comment = await service.createEntryComment("entry-1", "  short reply  ");
@@ -112,8 +110,72 @@ async function testServiceMethodsDoNotDependOnCallBinding() {
   });
 }
 
+async function testEntryWritesRequireOneReturnedRow() {
+  const requests = [];
+  const service = createDiaryService({
+    supabaseUrl: TEST_URL,
+    publishableKey: TEST_KEY,
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return jsonResponse([]);
+    },
+  });
+
+  await assert.rejects(
+    () => service.upsertEntryByDate({
+      entry_date: "2099-01-02",
+      title: "Test",
+      body: "Test body",
+    }),
+    /upsert did not affect a diary entry/,
+  );
+
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /select=id,entry_date,title,body,body_format,mood,metadata,source/);
+  assert(!requests[0].url.includes("select=*"));
+  assert.equal(requests[0].options.headers.Authorization, undefined);
+  assert.equal(requests[0].options.headers.Prefer, "resolution=merge-duplicates,return=representation");
+}
+
+async function testExpiredStoredSessionIsCleared() {
+  const originalWindow = globalThis.window;
+  const stored = new Map();
+  const expiredToken = testToken("expired-user");
+  stored.set("diary.supabase.session", JSON.stringify({
+    access_token: expiredToken,
+    expires_at: Math.floor(Date.now() / 1000) - 60,
+  }));
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => stored.get(key) || null,
+      setItem: (key, value) => stored.set(key, value),
+      removeItem: (key) => stored.delete(key),
+    },
+  };
+
+  try {
+    const client = createSupabaseClient({
+      supabaseUrl: TEST_URL,
+      publishableKey: TEST_KEY,
+      fetchImpl: async () => jsonResponse([]),
+    });
+
+    assert.equal(client.getSession(), null);
+    assert.equal(client.getUserId(), null);
+    assert.equal(stored.has("diary.supabase.session"), false);
+  } finally {
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+}
+
 await testPlainTextErrorsKeepHttpContext();
 await testBlockedStorageDoesNotBreakSignIn();
 await testServiceMethodsDoNotDependOnCallBinding();
+await testEntryWritesRequireOneReturnedRow();
+await testExpiredStoredSessionIsCleared();
 
 console.log("diary service unit test: ok");
