@@ -292,7 +292,7 @@ async function openWriterAndSave(page, bodySuffix) {
   assert(initialDate === expectedToday, `writer default date was ${initialDate}, expected ${expectedToday}`);
   await page.locator("#writerDate").fill(TEST_DATE);
   assert((await page.locator("#writerDate").inputValue()) === TEST_DATE, "writer date could not be changed");
-  await page.locator("#writerTitleInput").fill("E2E test entry");
+  assert(!(await page.locator("#writerTitleInput").isVisible()), "writer still asks for a title");
   await page.locator("#writerBody").fill(`E2E body ${bodySuffix}`);
   await page.locator("#uploadDraftBtn").click();
   await waitForAsync(

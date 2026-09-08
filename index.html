@@ -547,10 +547,8 @@
           <label for="writerDate">날짜</label>
           <input id="writerDate" name="date" type="date" required />
         </div>
-        <div class="writer-field">
-          <label for="writerTitleInput">제목</label>
-          <input id="writerTitleInput" name="title" type="text" maxlength="80" placeholder="오늘의 마음" autocomplete="off" />
-        </div>
+        <!-- Preserve titles from older local drafts without asking for a new title. -->
+        <input id="writerTitleInput" name="title" type="hidden" />
         <div class="writer-field">
           <label for="writerBody">본문</label>
           <textarea id="writerBody" name="body" placeholder="여기에 긴 일기를 적어 주세요."></textarea>
